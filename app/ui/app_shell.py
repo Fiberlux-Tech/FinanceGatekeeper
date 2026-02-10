@@ -109,8 +109,11 @@ class AppShell(ctk.CTk):
     def _show_login(self) -> None:
         """Display the login view and size the window appropriately."""
         self._clear_main_shell()
-        self.geometry(f"{LOGIN_WINDOW_WIDTH}x{LOGIN_WINDOW_HEIGHT}")
-        self.resizable(False, False)
+
+        # Start at a comfortable size; allow resizing down to the card minimum
+        self.geometry(f"{MAIN_WINDOW_WIDTH}x{MAIN_WINDOW_HEIGHT}")
+        self.resizable(True, True)
+        self.minsize(LOGIN_WINDOW_WIDTH, LOGIN_WINDOW_HEIGHT)
 
         # Lazy import to avoid circular dependency at module level
         from app.ui.login_view import LoginView  # noqa: WPS433

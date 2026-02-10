@@ -34,7 +34,6 @@ from app.ui.theme import (
     FONT_SMALL,
     INPUT_BG,
     INPUT_BORDER,
-    LOGIN_WINDOW_HEIGHT,
     PADDING_LG,
     PADDING_MD,
     PADDING_SM,
@@ -135,18 +134,29 @@ class LoginView(ctk.CTkFrame):
         """Create the complete login screen matching the Fiberlux design."""
         self.pack(fill="both", expand=True)
 
-        # Centered card container
-        card = ctk.CTkFrame(
+        # Scrollable wrapper so the card is always reachable on small windows
+        self._scroll = ctk.CTkScrollableFrame(
             self,
+            fg_color="transparent",
+            scrollbar_button_color=CONTENT_BG,
+            scrollbar_button_hover_color=INPUT_BORDER,
+        )
+        self._scroll.pack(fill="both", expand=True)
+
+        # Centering wrapper — keeps the card centred horizontally
+        center_wrapper = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        center_wrapper.pack(fill="x", expand=True, pady=(40, 20))
+
+        # Card container — fixed width, height grows with content
+        card = ctk.CTkFrame(
+            center_wrapper,
             width=_CARD_WIDTH,
-            height=LOGIN_WINDOW_HEIGHT - 60,
             fg_color=CONTENT_CARD_BG,
             corner_radius=16,
             border_width=1,
             border_color="#e0e0e0",
         )
-        card.place(relx=0.5, rely=0.48, anchor="center")
-        card.pack_propagate(False)
+        card.pack(anchor="center")
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=36, pady=28)
@@ -243,11 +253,11 @@ class LoginView(ctk.CTkFrame):
 
         # -- Copyright --
         ctk.CTkLabel(
-            self,
+            self._scroll,
             text="\u00A9 2025 Fiberlux Finanzas. All rights reserved.",
             font=("Segoe UI", 10),
             text_color=TEXT_SECONDARY,
-        ).place(relx=0.5, rely=0.97, anchor="center")
+        ).pack(pady=(PADDING_SM, PADDING_LG))
 
     def _build_sign_in_tab(self, parent: ctk.CTkFrame) -> None:
         """Build the Sign In form fields inside the given parent frame."""
