@@ -102,20 +102,20 @@ class StructuredLogger:
 
     # -- Convenience delegates ------------------------------------------------
 
-    def debug(self, msg: str, **kwargs: str) -> None:
-        self._logger.debug(msg, **kwargs)
+    def debug(self, msg: str, *args: object, **kwargs: object) -> None:
+        self._logger.debug(msg, *args, **kwargs)
 
-    def info(self, msg: str, **kwargs: str) -> None:
-        self._logger.info(msg, **kwargs)
+    def info(self, msg: str, *args: object, **kwargs: object) -> None:
+        self._logger.info(msg, *args, **kwargs)
 
-    def warning(self, msg: str, **kwargs: str) -> None:
-        self._logger.warning(msg, **kwargs)
+    def warning(self, msg: str, *args: object, **kwargs: object) -> None:
+        self._logger.warning(msg, *args, **kwargs)
 
-    def error(self, msg: str, **kwargs: str) -> None:
-        self._logger.error(msg, **kwargs)
+    def error(self, msg: str, *args: object, **kwargs: object) -> None:
+        self._logger.error(msg, *args, **kwargs)
 
-    def critical(self, msg: str, **kwargs: str) -> None:
-        self._logger.critical(msg, **kwargs)
+    def critical(self, msg: str, *args: object, **kwargs: object) -> None:
+        self._logger.critical(msg, *args, **kwargs)
 
 
 def get_logger(name: str = "gatekeeper") -> StructuredLogger:

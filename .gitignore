@@ -11,3 +11,9 @@ build/
 *.egg-info/
 .venv/
 venv/
+
+# Supabase CLI local state (machine-specific)
+supabase/.temp/
+
+# Windows NUL artifact
+nul

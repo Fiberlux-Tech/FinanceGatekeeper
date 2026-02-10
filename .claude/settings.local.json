@@ -10,7 +10,13 @@
       "Bash(git remote add:*)",
       "Bash(git fetch:*)",
       "Bash(supabase --version:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(npm install:*)",
+      "Bash(npx supabase:*)",
+      "Bash(where:*)",
+      "Bash(winget install:*)"
     ]
   }
 }
