@@ -134,7 +134,15 @@ class LoginView(ctk.CTkFrame):
         """Create the complete login screen matching the Fiberlux design."""
         self.pack(fill="both", expand=True)
 
-        # Card container — centred via place(), height grows with content
+        # Use grid to centre the card — row/column weights push it to the
+        # middle, and the card resizes naturally when tabs change height.
+        self.grid_rowconfigure(0, weight=1)      # top spacer
+        self.grid_rowconfigure(1, weight=0)      # card row (natural size)
+        self.grid_rowconfigure(2, weight=0)      # copyright row
+        self.grid_rowconfigure(3, weight=1)      # bottom spacer
+        self.grid_columnconfigure(0, weight=1)   # centre horizontally
+
+        # Card container — fixed width, height grows with content
         self._card = ctk.CTkFrame(
             self,
             width=_CARD_WIDTH,
@@ -143,7 +151,7 @@ class LoginView(ctk.CTkFrame):
             border_width=1,
             border_color="#e0e0e0",
         )
-        self._card.place(relx=0.5, rely=0.46, anchor="center")
+        self._card.grid(row=1, column=0, pady=(0, PADDING_SM))
 
         inner = ctk.CTkFrame(self._card, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=36, pady=28)
@@ -244,7 +252,7 @@ class LoginView(ctk.CTkFrame):
             text="\u00A9 2025 Fiberlux Finanzas. All rights reserved.",
             font=("Segoe UI", 10),
             text_color=TEXT_SECONDARY,
-        ).place(relx=0.5, rely=0.97, anchor="center")
+        ).grid(row=2, column=0, pady=(PADDING_SM, 0))
 
     def _build_sign_in_tab(self, parent: ctk.CTkFrame) -> None:
         """Build the Sign In form fields inside the given parent frame."""
