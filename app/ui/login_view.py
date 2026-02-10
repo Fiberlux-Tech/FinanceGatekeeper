@@ -112,7 +112,8 @@ class LoginView(ctk.CTkFrame):
         self._error_label: Optional[ctk.CTkLabel] = None
 
         # Request Access widgets
-        self._ra_name_entry: Optional[ctk.CTkEntry] = None
+        self._ra_first_name_entry: Optional[ctk.CTkEntry] = None
+        self._ra_last_name_entry: Optional[ctk.CTkEntry] = None
         self._ra_email_entry: Optional[ctk.CTkEntry] = None
         self._ra_password_entry: Optional[ctk.CTkEntry] = None
 
@@ -338,18 +339,36 @@ class LoginView(ctk.CTkFrame):
 
     def _build_request_access_tab(self, parent: ctk.CTkFrame) -> None:
         """Build the Request Access form (UI-only, no backend yet)."""
-        # Full Name
+        # Name row — two side-by-side fields
+        name_labels = ctk.CTkFrame(parent, fg_color="transparent")
+        name_labels.pack(fill="x", pady=(PADDING_MD, 4))
+        name_labels.grid_columnconfigure(0, weight=1)
+        name_labels.grid_columnconfigure(1, weight=1)
+
         ctk.CTkLabel(
-            parent,
-            text="FULL NAME",
+            name_labels,
+            text="FIRST NAME",
             font=_LABEL_FONT,
             text_color=TEXT_PRIMARY,
             anchor="w",
-        ).pack(fill="x", pady=(PADDING_MD, 4))
+        ).grid(row=0, column=0, sticky="w")
 
-        self._ra_name_entry = ctk.CTkEntry(
-            parent,
-            placeholder_text="e.g. Juan Perez",
+        ctk.CTkLabel(
+            name_labels,
+            text="LAST NAME",
+            font=_LABEL_FONT,
+            text_color=TEXT_PRIMARY,
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(PADDING_SM, 0))
+
+        name_row = ctk.CTkFrame(parent, fg_color="transparent")
+        name_row.pack(fill="x", pady=(0, PADDING_MD))
+        name_row.grid_columnconfigure(0, weight=1)
+        name_row.grid_columnconfigure(1, weight=1)
+
+        self._ra_first_name_entry = ctk.CTkEntry(
+            name_row,
+            placeholder_text="e.g. Juan",
             font=FONT_BODY,
             fg_color=INPUT_BG,
             border_color=INPUT_BORDER,
@@ -357,7 +376,21 @@ class LoginView(ctk.CTkFrame):
             height=_INPUT_HEIGHT,
             corner_radius=CORNER_RADIUS,
         )
-        self._ra_name_entry.pack(fill="x", pady=(0, PADDING_MD))
+        self._ra_first_name_entry.grid(row=0, column=0, sticky="ew")
+
+        self._ra_last_name_entry = ctk.CTkEntry(
+            name_row,
+            placeholder_text="e.g. Perez",
+            font=FONT_BODY,
+            fg_color=INPUT_BG,
+            border_color=INPUT_BORDER,
+            text_color=TEXT_PRIMARY,
+            height=_INPUT_HEIGHT,
+            corner_radius=CORNER_RADIUS,
+        )
+        self._ra_last_name_entry.grid(
+            row=0, column=1, sticky="ew", padx=(PADDING_SM, 0),
+        )
 
         # Email
         ctk.CTkLabel(
