@@ -134,31 +134,18 @@ class LoginView(ctk.CTkFrame):
         """Create the complete login screen matching the Fiberlux design."""
         self.pack(fill="both", expand=True)
 
-        # Scrollable wrapper so the card is always reachable on small windows
-        self._scroll = ctk.CTkScrollableFrame(
+        # Card container — centred via place(), height grows with content
+        self._card = ctk.CTkFrame(
             self,
-            fg_color="transparent",
-            scrollbar_button_color=CONTENT_BG,
-            scrollbar_button_hover_color=INPUT_BORDER,
-        )
-        self._scroll.pack(fill="both", expand=True)
-
-        # Centering wrapper — keeps the card centred horizontally
-        center_wrapper = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        center_wrapper.pack(fill="x", expand=True, pady=(40, 20))
-
-        # Card container — fixed width, height grows with content
-        card = ctk.CTkFrame(
-            center_wrapper,
             width=_CARD_WIDTH,
             fg_color=CONTENT_CARD_BG,
             corner_radius=16,
             border_width=1,
             border_color="#e0e0e0",
         )
-        card.pack(anchor="center")
+        self._card.place(relx=0.5, rely=0.46, anchor="center")
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner = ctk.CTkFrame(self._card, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=36, pady=28)
 
         # -- Brand icon (shield) --
@@ -253,11 +240,11 @@ class LoginView(ctk.CTkFrame):
 
         # -- Copyright --
         ctk.CTkLabel(
-            self._scroll,
+            self,
             text="\u00A9 2025 Fiberlux Finanzas. All rights reserved.",
             font=("Segoe UI", 10),
             text_color=TEXT_SECONDARY,
-        ).pack(pady=(PADDING_SM, PADDING_LG))
+        ).place(relx=0.5, rely=0.97, anchor="center")
 
     def _build_sign_in_tab(self, parent: ctk.CTkFrame) -> None:
         """Build the Sign In form fields inside the given parent frame."""
