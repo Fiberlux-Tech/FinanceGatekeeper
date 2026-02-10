@@ -34,7 +34,7 @@ __all__ = ["CURRENT_SCHEMA_VERSION", "initialize_schema"]
 # ---------------------------------------------------------------------------
 # Schema version -- bump this whenever a migration is added.
 # ---------------------------------------------------------------------------
-CURRENT_SCHEMA_VERSION: int = 2
+CURRENT_SCHEMA_VERSION: int = 3
 
 # ---------------------------------------------------------------------------
 # DDL statements for every table in the local database.

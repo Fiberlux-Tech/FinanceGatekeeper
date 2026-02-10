@@ -14,6 +14,7 @@ import customtkinter as ctk
 from app.auth import SessionManager
 from app.logger import StructuredLogger
 from app.ui.theme import (
+    ACCENT_PRIMARY,
     FONT_BODY,
     FONT_SIDEBAR,
     FONT_SIDEBAR_ACTIVE,
@@ -27,6 +28,10 @@ from app.ui.theme import (
     SIDEBAR_WIDTH,
     TEXT_LIGHT,
 )
+
+_AVATAR_SIZE: int = 40
+_LOGOUT_RED: str = "#e74c3c"
+_LOGOUT_RED_HOVER: str = "#3a1a1a"
 
 
 class _ModuleButton(ctk.CTkButton):
@@ -148,20 +153,48 @@ class SidebarNav(ctk.CTkFrame):
 
     def _build_ui(self) -> None:
         """Construct the sidebar layout."""
-        # --- User info section ---
+        user = self._session.get_current_user()
+
+        # --- User info section: avatar + name + role ---
         user_frame = ctk.CTkFrame(self, fg_color="transparent")
         user_frame.pack(fill="x", padx=PADDING_MD, pady=(PADDING_MD, PADDING_SM))
 
-        user = self._session.get_current_user()
+        # Row: avatar circle | name + role
+        row = ctk.CTkFrame(user_frame, fg_color="transparent")
+        row.pack(fill="x")
+
+        # Circular avatar with initials
+        initials = self._get_initials(user.full_name)
+        avatar = ctk.CTkFrame(
+            row,
+            width=_AVATAR_SIZE,
+            height=_AVATAR_SIZE,
+            corner_radius=_AVATAR_SIZE // 2,
+            fg_color=ACCENT_PRIMARY,
+        )
+        avatar.pack(side="left", padx=(0, 10))
+        avatar.pack_propagate(False)
+
         ctk.CTkLabel(
-            user_frame,
+            avatar,
+            text=initials,
+            font=("Segoe UI", 14, "bold"),
+            text_color=TEXT_LIGHT,
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        # Name + role stacked
+        text_frame = ctk.CTkFrame(row, fg_color="transparent")
+        text_frame.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            text_frame,
             text=user.full_name,
             font=FONT_SIDEBAR_ACTIVE,
             text_color=TEXT_LIGHT,
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
-            user_frame,
+            text_frame,
             text=user.role,
             font=FONT_SMALL,
             text_color=SIDEBAR_TEXT,
@@ -176,18 +209,34 @@ class SidebarNav(ctk.CTkFrame):
         self._modules_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._modules_frame.pack(fill="both", expand=True, padx=0, pady=PADDING_SM)
 
-        # --- Bottom section: logout ---
+        # --- Bottom section: separator + logout ---
+        bottom_sep = ctk.CTkFrame(self, height=1, fg_color=SIDEBAR_HOVER)
+        bottom_sep.pack(fill="x", padx=PADDING_MD, side="bottom")
+
         bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
-        bottom_frame.pack(fill="x", padx=PADDING_MD, pady=PADDING_MD, side="bottom")
+        bottom_frame.pack(
+            fill="x", padx=PADDING_SM, pady=PADDING_SM, side="bottom",
+        )
 
         ctk.CTkButton(
             bottom_frame,
-            text="Logout",
+            text="  \u23FB   Log Out",
             font=FONT_BODY,
             fg_color="transparent",
-            hover_color=SIDEBAR_HOVER,
-            text_color=SIDEBAR_TEXT,
+            hover_color=_LOGOUT_RED_HOVER,
+            text_color=_LOGOUT_RED,
             anchor="w",
             height=36,
+            corner_radius=6,
             command=self._on_logout,
         ).pack(fill="x")
+
+    @staticmethod
+    def _get_initials(full_name: str) -> str:
+        """Extract up to two uppercase initials from a full name."""
+        parts = full_name.strip().split()
+        if len(parts) >= 2:
+            return (parts[0][0] + parts[-1][0]).upper()
+        if parts:
+            return parts[0][0].upper()
+        return "?"

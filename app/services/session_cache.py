@@ -27,7 +27,9 @@ Storage layout (single-row table, ``id = 1``)::
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
+import os
 import socket
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
@@ -70,6 +72,8 @@ class CachedSession(BaseModel):
     role: Literal["SALES", "FINANCE", "ADMIN"]
     refresh_token: str
     cached_at: str  # ISO-8601 UTC
+    password_hash: Optional[str] = None  # hex-encoded PBKDF2-HMAC-SHA256
+    password_salt: Optional[str] = None  # hex-encoded random 32-byte salt
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +138,8 @@ class SessionCacheService:
         full_name: str,
         role: str,
         refresh_token: str,
+        password_hash: Optional[str] = None,
+        password_salt: Optional[str] = None,
     ) -> None:
         """Encrypt and persist a session payload for offline use.
 
@@ -153,14 +159,23 @@ class SessionCacheService:
             The application role string (e.g. ``"ADMIN"``).
         refresh_token:
             The Supabase refresh token.
+        password_hash:
+            Hex-encoded PBKDF2-HMAC-SHA256 hash of the user's password
+            for offline login verification.  ``None`` disables offline
+            password verification (forces online re-auth).
+        password_salt:
+            Hex-encoded random 32-byte salt used to derive the password
+            hash.  Must be supplied together with *password_hash*.
         """
-        payload: dict[str, str] = {
+        payload: dict[str, Optional[str]] = {
             "user_id": user_id,
             "email": email,
             "full_name": full_name,
             "role": role,
             "refresh_token": refresh_token,
             "cached_at": datetime.now(tz=timezone.utc).isoformat(),
+            "password_hash": password_hash,
+            "password_salt": password_salt,
         }
 
         plaintext: bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -307,6 +322,89 @@ class SessionCacheService:
             self._logger.error(
                 "Failed to clear cached session: %s", exc,
             )
+
+    def verify_offline_password(
+        self,
+        email: str,
+        password: str,
+    ) -> Optional[CachedSession]:
+        """Load the cached session and verify the entered password.
+
+        Combines ``load_cached_session()`` with PBKDF2-HMAC-SHA256
+        password verification so that offline login requires *both* a
+        matching email and the correct password.
+
+        Parameters
+        ----------
+        email:
+            The email address entered by the user.
+        password:
+            The plaintext password entered by the user.
+
+        Returns
+        -------
+        CachedSession or None
+            The decrypted session if the email matches and the password
+            hash verifies.  ``None`` is returned when:
+
+            - No cached session exists or it has expired.
+            - The cached email does not match the entered email.
+            - The cached session has no stored password hash (pre-Phase
+              1.5 cache — forces online re-authentication).
+            - The entered password does not match the stored hash.
+        """
+        cached = self.load_cached_session()
+        if cached is None or cached.email != email:
+            return None
+
+        if cached.password_hash is None or cached.password_salt is None:
+            self._logger.warning(
+                "Cached session for %s has no password hash. "
+                "Online login required.",
+                email,
+            )
+            return None
+
+        salt_bytes: bytes = bytes.fromhex(cached.password_salt)
+        computed_hash: str = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt_bytes,
+            iterations=self._PBKDF2_ITERATIONS,
+        ).hex()
+
+        if computed_hash != cached.password_hash:
+            self._logger.warning(
+                "Offline password verification failed for %s.", email,
+            )
+            return None
+
+        self._logger.info("Offline password verified for %s.", email)
+        return cached
+
+    @staticmethod
+    def hash_password(password: str) -> tuple[str, str]:
+        """Derive a PBKDF2-HMAC-SHA256 hash for offline password storage.
+
+        Parameters
+        ----------
+        password:
+            The plaintext password to hash.
+
+        Returns
+        -------
+        tuple[str, str]
+            A ``(hex_hash, hex_salt)`` pair.  The salt is 32 random
+            bytes; the hash is derived with 100 000 PBKDF2 iterations.
+        """
+        salt: bytes = os.urandom(32)
+        pw_hash: str = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            iterations=100_000,
+        ).hex()
+        return pw_hash, salt.hex()
 
     # ------------------------------------------------------------------
     # Private helpers

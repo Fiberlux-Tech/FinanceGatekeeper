@@ -20,7 +20,7 @@ from app.utils.string_helpers import normalize_keys, denormalize_keys
 class UserRepository(BaseRepository):
     """Data access layer for User entities."""
 
-    TABLE = "users"
+    TABLE = "profiles"
 
     def __init__(self, db: DatabaseManager, logger: logging.Logger) -> None:
         super().__init__(db, logger)

@@ -24,53 +24,53 @@ Phase 1 delivered the skeleton (login UI, session manager, JIT provisioning). Ph
 
 1.5.1 — Registration (Request Access)
 
-[ ] Wire supabase.auth.sign_up(): Collect first name, last name, email, and password from the Request Access form. Pass full_name (first + last) and default role SALES as user_metadata so the handle_new_user trigger populates the profiles table automatically.
+[x] Wire supabase.auth.sign_up(): Collect first name, last name, email, and password from the Request Access form. Pass full_name (first + last) and default role SALES as user_metadata so the handle_new_user trigger populates the profiles table automatically.
 
-[ ] Client-side validation: Email format regex (RFC 5322 simplified). Password policy: minimum 8 characters, at least 1 uppercase, 1 lowercase, 1 digit, 1 special character. Show inline errors per field before submitting.
+[x] Client-side validation: Email format regex (RFC 5322 simplified). Password policy: minimum 8 characters, at least 1 uppercase, 1 lowercase, 1 digit, 1 special character. Show inline errors per field before submitting.
 
-[ ] Post-signup UX: After successful sign_up, show a confirmation message: "Account created. Check your email to verify, then sign in." Switch the user back to the Sign In tab automatically.
+[x] Post-signup UX: After successful sign_up, show a confirmation message: "Account created. Check your email to verify, then sign in." Switch the user back to the Sign In tab automatically.
 
-[ ] Duplicate email handling: Catch AuthError when the email already exists and show "An account with this email already exists. Try signing in."
+[x] Duplicate email handling: Catch AuthError when the email already exists and show "An account with this email already exists. Try signing in."
 
-[ ] Loading state: Disable the Create Account button and show "Creating account..." while the request is in flight.
+[x] Loading state: Disable the Create Account button and show "Creating account..." while the request is in flight.
 
 1.5.2 — Login Hardening
 
-[ ] Specific error messages: Catch gotrue.errors.AuthApiError and map error codes to human messages: invalid_credentials -> "Incorrect email or password.", user_not_found -> "No account found for this email.", user_banned -> "Your account has been deactivated. Contact your administrator.", email_not_confirmed -> "Please verify your email before signing in."
+[x] Specific error messages: Catch gotrue.errors.AuthApiError and map error codes to human messages: invalid_credentials -> "Incorrect email or password.", user_not_found -> "No account found for this email.", user_banned -> "Your account has been deactivated. Contact your administrator.", email_not_confirmed -> "Please verify your email before signing in."
 
-[ ] Network vs auth errors: Distinguish connection failures (ConnectionError, TimeoutError) from authentication failures (AuthApiError). Show "Cannot reach the server. Check your internet connection." for network issues.
+[x] Network vs auth errors: Distinguish connection failures (ConnectionError, TimeoutError) from authentication failures (AuthApiError). Show "Cannot reach the server. Check your internet connection." for network issues.
 
-[ ] Rate-limit guard: After 3 consecutive failed login attempts, disable the Sign In button for 30 seconds with a countdown. Prevents brute-force hammering.
+[x] Rate-limit guard: After 3 consecutive failed login attempts, disable the Sign In button for 30 seconds with a countdown. Prevents brute-force hammering.
 
-[ ] Email normalization: Apply .strip().lower() to email input before any API call. Prevents case-sensitivity mismatches.
+[x] Email normalization: Apply .strip().lower() to email input before any API call. Prevents case-sensitivity mismatches.
 
 1.5.3 — Offline Login Security
 
-[ ] Password hash storage: When an online login succeeds, derive a PBKDF2-HMAC-SHA256 hash of the password (with a random salt) and store it alongside the encrypted session cache. On offline login, verify the entered password against this hash before granting access. This closes the shared-computer vulnerability where offline login currently accepts any password for a cached email.
+[x] Password hash storage: When an online login succeeds, derive a PBKDF2-HMAC-SHA256 hash of the password (with a random salt) and store it alongside the encrypted session cache. On offline login, verify the entered password against this hash before granting access. This closes the shared-computer vulnerability where offline login currently accepts any password for a cached email.
 
-[ ] Offline login audit: Log offline login events with a distinct event type (OFFLINE_LOGIN) in the structured logger so they are visible in the audit trail.
+[x] Offline login audit: Log offline login events with a distinct event type (OFFLINE_LOGIN) in the structured logger so they are visible in the audit trail.
 
 1.5.4 — Token Lifecycle
 
-[ ] Refresh failure -> forced logout: If token refresh fails with an auth error (refresh token expired or revoked), immediately clear the session and redirect to the login screen with the message "Your session has expired. Please sign in again." Only retry on transient network errors.
+[x] Refresh failure -> forced logout: If token refresh fails with an auth error (refresh token expired or revoked), immediately clear the session and redirect to the login screen with the message "Your session has expired. Please sign in again." Only retry on transient network errors.
 
-[ ] Server-side logout: Call supabase.auth.sign_out() in _handle_logout before clearing local state. Wrap in try/except so offline logout still works.
+[x] Server-side logout: Call supabase.auth.sign_out() in _handle_logout before clearing local state. Wrap in try/except so offline logout still works.
 
-[ ] Logout audit event: Log a structured LOGOUT event with user email and timestamp.
+[x] Logout audit event: Log a structured LOGOUT event with user email and timestamp.
 
 1.5.5 — Password Reset
 
-[ ] "Forgot Password?" link: Add a clickable label below the Sign In button. When clicked, show an inline email input and a "Send Reset Link" button.
+[x] "Forgot Password?" link: Add a clickable label below the Sign In button. When clicked, show an inline email input and a "Send Reset Link" button.
 
-[ ] Reset email dispatch: Call supabase.auth.reset_password_for_email(email) and show "If this email is registered, you will receive a password reset link."
+[x] Reset email dispatch: Call supabase.auth.reset_password_for_email(email) and show "If this email is registered, you will receive a password reset link."
 
-[ ] UX feedback: Disable the reset button while the request is in flight. Show success/error states.
+[x] UX feedback: Disable the reset button while the request is in flight. Show success/error states.
 
 1.5.6 — Email Confirmation Awareness
 
-[ ] Post-signup guard: After sign_up, if Supabase has email confirmation enabled, the user cannot sign in until they click the verification link. Detect the email_not_confirmed error on login and show "Please check your inbox and verify your email before signing in."
+[x] Post-signup guard: After sign_up, if Supabase has email confirmation enabled, the user cannot sign in until they click the verification link. Detect the email_not_confirmed error on login and show "Please check your inbox and verify your email before signing in."
 
-[ ] Resend confirmation: Add a "Resend verification email" action that calls supabase.auth.resend(type="signup", email=email).
+[x] Resend confirmation: Add a "Resend verification email" action that calls supabase.auth.resend(type="signup", email=email).
 
 Done Criteria: A brand-new user can open the app, register via Request Access, receive a verification email, confirm, sign in, have their profile provisioned, reset their password if forgotten, log out (server-side revoked), and log in offline with password verification. All error paths show clear, human-readable messages.
 

@@ -69,7 +69,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 6. Service Container (repositories + services, single composition root)
     # ------------------------------------------------------------------
-    services = create_services(db=db, config=config)
+    services = create_services(
+        db=db,
+        config=config,
+        session=session,
+        session_cache=session_cache,
+    )
 
     # ------------------------------------------------------------------
     # 7. Module Registry (plug-and-play modules)

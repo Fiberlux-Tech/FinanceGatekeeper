@@ -40,6 +40,7 @@ STATUS_SYNCING: Final[str] = "#f39c12"
 INPUT_BG: Final[str] = "#ffffff"
 INPUT_BORDER: Final[str] = "#ced4da"
 ERROR_TEXT: Final[str] = "#dc3545"
+SUCCESS_TEXT: Final[str] = "#27ae60"
 
 # ---------------------------------------------------------------------------
 # Fonts (Segoe UI — Windows default, fallback to system)

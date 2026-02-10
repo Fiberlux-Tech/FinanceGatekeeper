@@ -1,5 +1,23 @@
 # Claude AI Agent: S-Tier Coding Standards
 
+## 0. Production-Ready Mandate (NON-NEGOTIABLE)
+
+Every task, feature, fix, or refactor MUST be carried through to a fully production-ready state. "Production-ready" means:
+
+1. **Complete Implementation**: No partial implementations, placeholder logic, TODO stubs, or "we'll finish this later" shortcuts. Every code path must be functional.
+
+2. **Error Handling**: All failure modes must be handled with clear, user-facing messages. No bare `except: pass`. No silent failures. No unhandled edge cases.
+
+3. **Type Safety & Validation**: Full PEP 484 type hints on every signature. Pydantic models for all data boundaries. No `Any`, no untyped dictionaries crossing layer boundaries.
+
+4. **Tested & Verified**: Code must be manually or programmatically verified to work before marking a task complete. If a feature cannot be tested in isolation, document the verification steps taken.
+
+5. **Integrated**: New code must be wired into the existing architecture — registered in `__init__.py` files, imported where needed, connected to the UI or service layer. Dead code that "exists but isn't called" is not production-ready.
+
+6. **Clean**: No debug prints, no commented-out blocks, no leftover scaffolding. The code that ships is the code that runs.
+
+This mandate overrides speed. A feature delivered at 100% quality in one session is worth more than three features delivered at 70% that require follow-up cleanup. If a task is too large to complete to production-ready standards in one pass, break it into smaller sub-tasks — each of which is ITSELF production-ready.
+
 ## 1. Core Philosophy
 
 Architecture > Speed: Never prioritize a quick fix over the established architectural patterns (Repository, Service, Command).

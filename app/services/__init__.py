@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from app.auth import SessionManager
 from app.config import AppConfig
 from app.database import DatabaseManager
 from app.logger import get_logger
@@ -22,6 +23,7 @@ from app.repositories.master_variable_repository import MasterVariableRepository
 from app.repositories.recurring_service_repository import RecurringServiceRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.repositories.user_repository import UserRepository
+from app.services.auth_service import AuthService
 from app.services.email_service import EmailService
 from app.services.excel_parser import ExcelParserService
 from app.services.jit_provisioning import JITProvisioningService
@@ -29,6 +31,7 @@ from app.services.kpi import KPIService
 from app.services.transaction_crud import TransactionCrudService
 from app.services.transaction_preview import TransactionPreviewService
 from app.services.transaction_workflow import TransactionWorkflowService
+from app.services.session_cache import SessionCacheService
 from app.services.users import UserService
 from app.services.variables import VariableService
 
@@ -36,6 +39,7 @@ from app.services.variables import VariableService
 class ServiceContainer(TypedDict):
     """Typed container for all application services."""
 
+    auth_service: AuthService
     variable_service: VariableService
     user_service: UserService
     jit_provisioning_service: JITProvisioningService
@@ -47,7 +51,12 @@ class ServiceContainer(TypedDict):
     transaction_preview_service: TransactionPreviewService
 
 
-def create_services(db: DatabaseManager, config: AppConfig) -> ServiceContainer:
+def create_services(
+    db: DatabaseManager,
+    config: AppConfig,
+    session: SessionManager,
+    session_cache: SessionCacheService,
+) -> ServiceContainer:
     """
     Wire all repositories and services together.
 
@@ -102,6 +111,14 @@ def create_services(db: DatabaseManager, config: AppConfig) -> ServiceContainer:
         logger=logger,
     )
 
+    auth_service = AuthService(
+        db=db,
+        session=session,
+        jit_service=jit_provisioning_service,
+        session_cache=session_cache,
+        logger=logger,
+    )
+
     # ------------------------------------------------------------------
     # 3. Orchestration services (depend on other services)
     # ------------------------------------------------------------------
@@ -127,6 +144,7 @@ def create_services(db: DatabaseManager, config: AppConfig) -> ServiceContainer:
     )
 
     return ServiceContainer(
+        auth_service=auth_service,
         variable_service=variable_service,
         user_service=user_service,
         jit_provisioning_service=jit_provisioning_service,

@@ -1,12 +1,12 @@
 """Login View — Authentication Screen.
 
 Presents a polished login form with Sign In / Request Access tabs,
-authenticates against Supabase, falls back to an encrypted offline
-session cache when no internet is available, and provisions the user
-to the local SQLite database via JIT sync.
+authenticates against Supabase via ``AuthService``, falls back to an
+encrypted offline session cache when no internet is available, and
+provisions the user to the local SQLite database via JIT sync.
 
 **Thin UI Rule**: This module contains ZERO business logic.  It
-gathers inputs, delegates to injected services, and displays results.
+gathers inputs, delegates to ``AuthService``, and displays results.
 """
 
 from __future__ import annotations
@@ -17,11 +17,9 @@ from typing import Callable, Optional
 
 import customtkinter as ctk
 
-from app.auth import CurrentUser, SessionManager
-from app.database import DatabaseManager
 from app.logger import StructuredLogger
-from app.services.jit_provisioning import JITProvisioningService
-from app.services.session_cache import SessionCacheService
+from app.models.auth_models import AuthErrorCode
+from app.services.auth_service import AuthService
 from app.ui.theme import (
     ACCENT_HOVER,
     ACCENT_PRIMARY,
@@ -37,6 +35,7 @@ from app.ui.theme import (
     PADDING_LG,
     PADDING_MD,
     PADDING_SM,
+    SUCCESS_TEXT,
     TEXT_LIGHT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -56,26 +55,19 @@ _BRAND_ICON_SIZE: int = 56
 class LoginView(ctk.CTkFrame):
     """Full-screen login frame with Sign In / Request Access tabs.
 
-    Delegates all authentication logic to injected services:
+    Delegates all authentication logic to the injected ``AuthService``:
 
-    - ``DatabaseManager`` for Supabase client access.
-    - ``SessionManager`` to store the authenticated user.
-    - ``JITProvisioningService`` to sync the user to local SQLite.
-    - ``SessionCacheService`` for encrypted offline session fallback.
-    - ``StructuredLogger`` for audit-grade JSON logging.
+    - Login (online + offline with password verification)
+    - Registration (Supabase sign_up with validation)
+    - Password reset
+    - Rate limiting
 
     Parameters
     ----------
     parent:
         The root ``CTk`` window this frame belongs to.
-    db:
-        Initialised database manager (Supabase + SQLite).
-    session:
-        The session manager that holds current user state.
-    jit_service:
-        Service for just-in-time user provisioning to local DB.
-    session_cache:
-        Service for caching/loading encrypted session data offline.
+    auth_service:
+        Centralised authentication service encapsulating all auth logic.
     on_login_success:
         Callback invoked (on the main thread) after successful login.
     logger:
@@ -85,37 +77,44 @@ class LoginView(ctk.CTkFrame):
     def __init__(
         self,
         parent: ctk.CTk,
-        db: DatabaseManager,
-        session: SessionManager,
-        jit_service: JITProvisioningService,
-        session_cache: SessionCacheService,
+        auth_service: AuthService,
         on_login_success: Callable[[], None],
         logger: StructuredLogger,
     ) -> None:
         super().__init__(parent, fg_color=CONTENT_BG)
 
         self._parent: ctk.CTk = parent
-        self._db: DatabaseManager = db
-        self._session: SessionManager = session
-        self._jit_service: JITProvisioningService = jit_service
-        self._session_cache: SessionCacheService = session_cache
+        self._auth_service: AuthService = auth_service
         self._on_login_success: Callable[[], None] = on_login_success
         self._logger: StructuredLogger = logger
 
         # Active tab tracking
         self._active_tab: str = "sign_in"
 
-        # Widget references (populated by _build_ui)
+        # Sign In widgets
         self._email_entry: Optional[ctk.CTkEntry] = None
         self._password_entry: Optional[ctk.CTkEntry] = None
         self._login_button: Optional[ctk.CTkButton] = None
         self._error_label: Optional[ctk.CTkLabel] = None
+
+        # Rate-limit countdown
+        self._countdown_label: Optional[ctk.CTkLabel] = None
+        self._countdown_job: Optional[str] = None
+
+        # Forgot Password widgets
+        self._forgot_password_frame: Optional[ctk.CTkFrame] = None
+        self._forgot_email_entry: Optional[ctk.CTkEntry] = None
+        self._forgot_button: Optional[ctk.CTkButton] = None
+        self._forgot_message_label: Optional[ctk.CTkLabel] = None
 
         # Request Access widgets
         self._ra_first_name_entry: Optional[ctk.CTkEntry] = None
         self._ra_last_name_entry: Optional[ctk.CTkEntry] = None
         self._ra_email_entry: Optional[ctk.CTkEntry] = None
         self._ra_password_entry: Optional[ctk.CTkEntry] = None
+        self._ra_create_button: Optional[ctk.CTkButton] = None
+        self._ra_error_label: Optional[ctk.CTkLabel] = None
+        self._ra_success_label: Optional[ctk.CTkLabel] = None
 
         # Tab buttons
         self._sign_in_tab: Optional[ctk.CTkButton] = None
@@ -325,20 +324,79 @@ class LoginView(ctk.CTkFrame):
         self._error_label.pack(fill="x")
         self._error_label.pack_forget()
 
-        # Help text
-        ctk.CTkLabel(
+        # Rate-limit countdown label (hidden by default)
+        self._countdown_label = ctk.CTkLabel(
             parent,
-            text="Don't have an account? Ask your manager to invite you.",
-            font=("Segoe UI", 10),
-            text_color=TEXT_SECONDARY,
+            text="",
+            font=FONT_SMALL,
+            text_color=ERROR_TEXT,
+        )
+        # Not packed — shown during rate-limit lockout
+
+        # Forgot Password link
+        ctk.CTkButton(
+            parent,
+            text="Forgot Password?",
+            font=("Segoe UI", 11),
+            fg_color="transparent",
+            hover_color="#f0f0f0",
+            text_color=ACCENT_PRIMARY,
+            height=28,
+            corner_radius=CORNER_RADIUS,
+            command=self._show_forgot_password,
         ).pack(pady=(PADDING_SM, 0))
+
+        # Forgot Password inline form (hidden by default)
+        self._forgot_password_frame = ctk.CTkFrame(parent, fg_color="transparent")
+
+        ctk.CTkLabel(
+            self._forgot_password_frame,
+            text="Enter your email to receive a reset link:",
+            font=FONT_SMALL,
+            text_color=TEXT_SECONDARY,
+        ).pack(fill="x", pady=(0, 4))
+
+        self._forgot_email_entry = ctk.CTkEntry(
+            self._forgot_password_frame,
+            placeholder_text="name@fiberlux.pe",
+            font=FONT_BODY,
+            fg_color=INPUT_BG,
+            border_color=INPUT_BORDER,
+            text_color=TEXT_PRIMARY,
+            height=_INPUT_HEIGHT,
+            corner_radius=CORNER_RADIUS,
+        )
+        self._forgot_email_entry.pack(fill="x", pady=(0, PADDING_SM))
+
+        self._forgot_button = ctk.CTkButton(
+            self._forgot_password_frame,
+            text="Send Reset Link",
+            font=FONT_BUTTON,
+            fg_color=ACCENT_PRIMARY,
+            hover_color=ACCENT_HOVER,
+            text_color=TEXT_LIGHT,
+            height=36,
+            corner_radius=CORNER_RADIUS,
+            command=self._handle_forgot_password,
+        )
+        self._forgot_button.pack(fill="x", pady=(0, PADDING_SM))
+
+        self._forgot_message_label = ctk.CTkLabel(
+            self._forgot_password_frame,
+            text="",
+            font=FONT_SMALL,
+            text_color=TEXT_SECONDARY,
+            wraplength=_CARD_WIDTH - 100,
+        )
+        self._forgot_message_label.pack(fill="x")
+        # NOT packed yet — shown on "Forgot Password?" click
 
         # Key bindings
         self._email_entry.bind("<Return>", self._on_enter_key)
         self._password_entry.bind("<Return>", self._on_enter_key)
 
     def _build_request_access_tab(self, parent: ctk.CTkFrame) -> None:
-        """Build the Request Access form (UI-only, no backend yet)."""
+        """Build the Request Access registration form."""
         # Name row — two side-by-side fields
         name_labels = ctk.CTkFrame(parent, fg_color="transparent")
         name_labels.pack(fill="x", pady=(PADDING_MD, 4))
@@ -436,7 +494,7 @@ class LoginView(ctk.CTkFrame):
         self._ra_password_entry.pack(fill="x", pady=(0, PADDING_LG))
 
         # Create Account button
-        ctk.CTkButton(
+        self._ra_create_button = ctk.CTkButton(
             parent,
             text="Create Account  \u2192",
             font=FONT_BUTTON,
@@ -446,7 +504,30 @@ class LoginView(ctk.CTkFrame):
             height=_BUTTON_HEIGHT,
             corner_radius=CORNER_RADIUS,
             command=self._handle_request_access,
-        ).pack(fill="x", pady=(0, PADDING_SM))
+        )
+        self._ra_create_button.pack(fill="x", pady=(0, PADDING_SM))
+
+        # Error label for Request Access (hidden by default)
+        self._ra_error_label = ctk.CTkLabel(
+            parent,
+            text="",
+            font=FONT_SMALL,
+            text_color=ERROR_TEXT,
+            wraplength=_CARD_WIDTH - 100,
+        )
+        self._ra_error_label.pack(fill="x")
+        self._ra_error_label.pack_forget()
+
+        # Success label for Request Access (hidden by default)
+        self._ra_success_label = ctk.CTkLabel(
+            parent,
+            text="",
+            font=FONT_SMALL,
+            text_color=SUCCESS_TEXT,
+            wraplength=_CARD_WIDTH - 100,
+        )
+        self._ra_success_label.pack(fill="x")
+        self._ra_success_label.pack_forget()
 
         # Info text
         ctk.CTkLabel(
@@ -466,6 +547,7 @@ class LoginView(ctk.CTkFrame):
             return
         self._active_tab = tab
         self._clear_error()
+        self._clear_ra_messages()
 
         if tab == "sign_in":
             self._request_frame.pack_forget()
@@ -500,7 +582,7 @@ class LoginView(ctk.CTkFrame):
             )
 
     # ------------------------------------------------------------------
-    # Event Handlers
+    # Event Handlers — Sign In
     # ------------------------------------------------------------------
 
     def _on_enter_key(self, event: tk.Event[tk.Misc]) -> None:
@@ -508,7 +590,7 @@ class LoginView(ctk.CTkFrame):
         self._handle_login()
 
     def _handle_login(self) -> None:
-        """Gather inputs, validate, start background auth."""
+        """Gather inputs, check rate limit, start background auth."""
         email = self._email_entry.get().strip()
         password = self._password_entry.get()
 
@@ -516,84 +598,44 @@ class LoginView(ctk.CTkFrame):
             self._show_error("Please enter email and password.")
             return
 
+        # Check rate limit before starting background thread
+        is_locked, remaining = self._auth_service.check_rate_limit()
+        if is_locked:
+            self._show_error(
+                f"Too many failed attempts. Please wait {remaining} seconds."
+            )
+            self._start_countdown(remaining)
+            return
+
         self._set_loading(True)
         self._clear_error()
+
         threading.Thread(
             target=self._authenticate,
             args=(email, password),
             daemon=True,
         ).start()
 
-    def _handle_request_access(self) -> None:
-        """Placeholder for the Request Access flow (not yet implemented)."""
-        self._logger.info("Request Access clicked (not yet implemented).")
-
-    # ------------------------------------------------------------------
-    # Background Authentication
-    # ------------------------------------------------------------------
-
     def _authenticate(self, email: str, password: str) -> None:
-        """Background thread: Supabase auth -> JIT -> session cache.
+        """Background thread: delegate to AuthService.login().
 
         Runs off the main thread to keep the UI responsive.  All UI
         mutations are dispatched back via ``self.after(0, ...)``.
         """
         try:
-            # 1. Try Supabase auth
-            response = self._db.supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password,
-            })
-            user_data = response.user
-            session_data = response.session
-            user_metadata = user_data.user_metadata or {}
+            result = self._auth_service.login(email, password)
 
-            # 2. Build CurrentUser from JWT
-            current_user = CurrentUser(
-                id=user_data.id,
-                email=user_data.email or email,
-                full_name=user_metadata.get("full_name", email.split("@")[0]),
-                role=user_metadata.get("role", "SALES"),
-            )
-
-            # 3. Set session + tokens
-            self._session.set_current_user(current_user)
-            self._session.set_tokens(
-                access_token=session_data.access_token,
-                refresh_token=session_data.refresh_token,
-                expires_at=session_data.expires_at,
-            )
-
-            # 4. JIT provisioning (sync to local SQLite)
-            self._jit_service.ensure_user_synced(
-                user_id=current_user.id,
-                email=current_user.email,
-                full_name=current_user.full_name,
-                role=current_user.role,
-            )
-
-            # 5. Cache session for offline use
-            self._session_cache.cache_session(
-                user_id=current_user.id,
-                email=current_user.email,
-                full_name=current_user.full_name,
-                role=current_user.role,
-                refresh_token=session_data.refresh_token,
-            )
-
-            self._logger.info(
-                "User authenticated: %s (role: %s)",
-                current_user.full_name,
-                current_user.role,
-            )
-            self.after(0, self._on_login_success)
-
-        except RuntimeError:
-            # Supabase not available -- try offline fallback
-            self.after(0, lambda: self._try_offline_login(email))
+            if result.success:
+                self.after(0, self._on_login_success)
+            else:
+                def show_login_result() -> None:
+                    self._show_error(result.error_message or "Login failed.")
+                    if result.error_code == AuthErrorCode.RATE_LIMITED:
+                        _, remaining = self._auth_service.check_rate_limit()
+                        self._start_countdown(remaining)
+                self.after(0, show_login_result)
         except Exception as exc:
             error_msg = str(exc)
-            self._logger.warning("Login failed: %s", error_msg)
             self.after(
                 0,
                 lambda msg=error_msg: self._show_error(f"Login failed: {msg}"),
@@ -602,34 +644,140 @@ class LoginView(ctk.CTkFrame):
             self.after(0, lambda: self._set_loading(False))
 
     # ------------------------------------------------------------------
-    # Offline Fallback
+    # Event Handlers — Request Access (Registration)
     # ------------------------------------------------------------------
 
-    def _try_offline_login(self, email: str) -> None:
-        """Fallback: check encrypted session cache.
+    def _handle_request_access(self) -> None:
+        """Gather inputs, validate non-empty, start background registration."""
+        first_name = self._ra_first_name_entry.get().strip()
+        last_name = self._ra_last_name_entry.get().strip()
+        email = self._ra_email_entry.get().strip()
+        password = self._ra_password_entry.get()
 
-        If the session cache contains a valid entry for the given email,
-        restore the session and proceed.  Otherwise, show an error
-        explaining that online login is required first.
-        """
-        cached = self._session_cache.load_cached_session()
-        if cached and cached.email == email:
-            current_user = CurrentUser(
-                id=cached.user_id,
-                email=cached.email,
-                full_name=cached.full_name,
-                role=cached.role,
+        self._clear_ra_messages()
+
+        if not all([first_name, last_name, email, password]):
+            self._show_ra_error("All fields are required.")
+            return
+
+        self._set_ra_loading(True)
+        threading.Thread(
+            target=self._do_register,
+            args=(first_name, last_name, email, password),
+            daemon=True,
+        ).start()
+
+    def _do_register(
+        self,
+        first_name: str,
+        last_name: str,
+        email: str,
+        password: str,
+    ) -> None:
+        """Background thread: delegate to AuthService.register()."""
+        try:
+            result = self._auth_service.register(
+                first_name, last_name, email, password,
             )
-            self._session.set_current_user(current_user)
-            self._logger.warning(
-                "Offline login: %s from encrypted cache.", email,
+
+            def show_registration_result() -> None:
+                if result.success:
+                    self._ra_success_label.configure(
+                        text="Account created! You can now sign in.",
+                    )
+                    self._ra_success_label.pack(fill="x")
+                    # Clear form fields
+                    self._ra_first_name_entry.delete(0, "end")
+                    self._ra_last_name_entry.delete(0, "end")
+                    self._ra_email_entry.delete(0, "end")
+                    self._ra_password_entry.delete(0, "end")
+                    # Auto-switch to Sign In tab after 3 seconds
+                    self.after(3000, lambda: self._switch_tab("sign_in"))
+                else:
+                    self._show_ra_error(
+                        result.error_message or "Registration failed."
+                    )
+
+            self.after(0, show_registration_result)
+        except Exception as exc:
+            error_msg = str(exc)
+            self.after(
+                0,
+                lambda msg=error_msg: self._show_ra_error(
+                    f"Registration failed: {msg}"
+                ),
             )
-            self._on_login_success()
+        finally:
+            self.after(0, lambda: self._set_ra_loading(False))
+
+    # ------------------------------------------------------------------
+    # Event Handlers — Forgot Password
+    # ------------------------------------------------------------------
+
+    def _show_forgot_password(self) -> None:
+        """Toggle visibility of the Forgot Password inline form."""
+        if self._forgot_password_frame.winfo_manager():
+            self._forgot_password_frame.pack_forget()
         else:
-            self._show_error(
-                "No internet connection. "
-                "Sign in online first to enable offline access."
+            self._forgot_password_frame.pack(fill="x", pady=(PADDING_SM, 0))
+            self._forgot_message_label.configure(text="")
+
+    def _handle_forgot_password(self) -> None:
+        """Delegate password reset to AuthService."""
+        email = self._forgot_email_entry.get().strip()
+        if not email:
+            self._forgot_message_label.configure(
+                text="Please enter your email address.",
+                text_color=ERROR_TEXT,
             )
+            return
+
+        self._forgot_button.configure(text="Sending...", state="disabled")
+
+        def do_reset() -> None:
+            result = self._auth_service.request_password_reset(email)
+
+            def show_reset_result() -> None:
+                color = SUCCESS_TEXT if result.success else ERROR_TEXT
+                self._forgot_message_label.configure(
+                    text=result.error_message or "",
+                    text_color=color,
+                )
+                self._forgot_button.configure(
+                    text="Send Reset Link", state="normal",
+                )
+
+            self.after(0, show_reset_result)
+
+        threading.Thread(target=do_reset, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Rate-limit countdown
+    # ------------------------------------------------------------------
+
+    def _start_countdown(self, seconds: int) -> None:
+        """Show a countdown timer for rate-limit lockout."""
+        if self._countdown_job:
+            self.after_cancel(self._countdown_job)
+
+        self._login_button.configure(state="disabled")
+        self._countdown_label.pack(fill="x")
+
+        def tick(remaining: int) -> None:
+            if remaining <= 0:
+                self._countdown_label.pack_forget()
+                self._login_button.configure(
+                    state="normal", text="Sign In  \u2192",
+                )
+                self._countdown_job = None
+                return
+            self._countdown_label.configure(
+                text=f"Please wait {remaining} seconds before trying again.",
+            )
+            self._login_button.configure(text=f"Sign In ({remaining}s)")
+            self._countdown_job = self.after(1000, lambda: tick(remaining - 1))
+
+        tick(seconds)
 
     # ------------------------------------------------------------------
     # UI Helper Methods
@@ -637,8 +785,9 @@ class LoginView(ctk.CTkFrame):
 
     def _show_error(self, message: str) -> None:
         """Display a red error message below the login button."""
-        self._error_label.configure(text=message)
-        self._error_label.pack(fill="x")
+        if self._error_label is not None:
+            self._error_label.configure(text=message)
+            self._error_label.pack(fill="x")
 
     def _clear_error(self) -> None:
         """Hide the error label."""
@@ -646,20 +795,56 @@ class LoginView(ctk.CTkFrame):
             self._error_label.configure(text="")
             self._error_label.pack_forget()
 
+    def _show_ra_error(self, message: str) -> None:
+        """Display an error in the Request Access tab."""
+        if self._ra_error_label is not None:
+            self._ra_error_label.configure(text=message)
+            self._ra_error_label.pack(fill="x")
+
+    def _clear_ra_messages(self) -> None:
+        """Hide both error and success labels in the Request Access tab."""
+        if self._ra_error_label is not None:
+            self._ra_error_label.configure(text="")
+            self._ra_error_label.pack_forget()
+        if self._ra_success_label is not None:
+            self._ra_success_label.configure(text="")
+            self._ra_success_label.pack_forget()
+
     def _set_loading(self, loading: bool) -> None:
         """Toggle the login button between normal and loading states.
 
         When *loading* is ``True`` the button text changes to
         "Signing in..." and becomes disabled so the user cannot
-        double-submit.
+        double-submit.  When a countdown is active, the button state
+        is managed by ``_start_countdown`` and must not be overridden.
         """
+        if self._login_button is None:
+            return
         if loading:
             self._login_button.configure(
                 text="Signing in...",
                 state="disabled",
             )
         else:
+            # Don't re-enable if a rate-limit countdown is running
+            if self._countdown_job is not None:
+                return
             self._login_button.configure(
                 text="Sign In  \u2192",
+                state="normal",
+            )
+
+    def _set_ra_loading(self, loading: bool) -> None:
+        """Toggle the Create Account button between normal and loading states."""
+        if self._ra_create_button is None:
+            return
+        if loading:
+            self._ra_create_button.configure(
+                text="Creating account...",
+                state="disabled",
+            )
+        else:
+            self._ra_create_button.configure(
+                text="Create Account  \u2192",
                 state="normal",
             )

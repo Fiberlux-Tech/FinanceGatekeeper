@@ -19,7 +19,9 @@ from app.auth import SessionManager
 from app.config import AppConfig
 from app.database import DatabaseManager
 from app.logger import StructuredLogger
+from app.models.auth_models import AuthErrorCode
 from app.services import ServiceContainer
+from app.services.auth_service import AuthService
 from app.services.session_cache import SessionCacheService
 from app.ui.components.status_bar import StatusBar
 from app.ui.module_registry import ModuleRegistry
@@ -120,10 +122,7 @@ class AppShell(ctk.CTk):
 
         self._login_view = LoginView(
             parent=self,
-            db=self._db,
-            session=self._session,
-            jit_service=self._services["jit_provisioning_service"],
-            session_cache=self._session_cache,
+            auth_service=self._services["auth_service"],
             on_login_success=self._handle_login_success,
             logger=self._logger,
         )
@@ -219,15 +218,9 @@ class AppShell(ctk.CTk):
         self._show_main_shell()
 
     def _handle_logout(self) -> None:
-        """Clear session state and return to the login screen."""
-        full_name = (
-            self._session.get_current_user().full_name
-            if self._session.is_authenticated
-            else "unknown"
-        )
-        self._session.clear()
-        self._session_cache.clear_session()
-        self._logger.info("User logged out: %s", full_name)
+        """Delegate logout to AuthService and return to login screen."""
+        auth_service: AuthService = self._services["auth_service"]
+        auth_service.logout()
         self._show_login()
 
     def _clear_main_shell(self) -> None:
@@ -252,28 +245,32 @@ class AppShell(ctk.CTk):
     # ==================================================================
 
     def _check_session(self) -> None:
-        """Periodic check: refresh the access token if nearing expiry."""
+        """Periodic check: refresh the access token via AuthService.
+
+        Distinguishes auth errors (expired/revoked refresh token →
+        forced logout) from transient network errors (silently retry
+        next cycle).
+        """
         if not self._session.is_authenticated:
             return
 
-        if self._session.is_token_expired and self._db.is_online:
-            refresh_token: Optional[str] = self._session.refresh_token
-            if refresh_token:
-                try:
-                    response = self._db.supabase.auth.refresh_session(refresh_token)
-                    new_session = response.session  # gotrue.Session | None
-                    if new_session is not None:
-                        self._session.set_tokens(
-                            access_token=new_session.access_token,
-                            refresh_token=new_session.refresh_token,
-                            expires_at=new_session.expires_at,
-                        )
-                        self._logger.info("Session token refreshed.")
-                except Exception as exc:
-                    self._logger.warning(
-                        "Session refresh failed: %s. User may need to re-login.",
-                        exc,
-                    )
+        auth_service: AuthService = self._services["auth_service"]
+        result = auth_service.refresh_session_token()
+
+        if not result.success and result.error_code == AuthErrorCode.SESSION_EXPIRED:
+            self._logger.warning("Session expired. Forcing logout.")
+            auth_service.logout()
+            self._show_login()
+            # Show the session-expired message after login view is built
+            self.after(100, self._show_session_expired_message)
+            return
 
         # Schedule next check
         self.after(_SESSION_CHECK_INTERVAL_MS, self._check_session)
+
+    def _show_session_expired_message(self) -> None:
+        """Show session expired message on the login view."""
+        if hasattr(self, "_login_view") and self._login_view is not None:
+            self._login_view._show_error(
+                "Your session has expired. Please sign in again."
+            )

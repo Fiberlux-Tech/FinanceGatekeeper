@@ -1,5 +1,20 @@
 Finance Gatekeeper OS: Technical Specifications & Standards
 
+0. Production-Ready Standard
+
+Every piece of work — whether a new feature, a bug fix, a refactor, or a schema change — MUST be delivered to a fully production-ready state before it is considered complete. This is a binding standard, not a suggestion.
+
+Production-ready means:
+
+- Complete: No placeholder logic, TODO comments, or partial implementations. Every code path is functional and reachable.
+- Robust: All error conditions are handled explicitly. Network failures, invalid input, file locks, race conditions — each has a defined recovery path with a user-facing message.
+- Type-safe: Full PEP 484 type annotations on all function signatures. Pydantic models validate data at every system boundary (UI input, Excel parsing, API responses, database reads).
+- Integrated: New code is wired into the existing architecture. Services are registered, imports are connected, UI elements trigger real logic. Code that exists but is never called is not production-ready.
+- Clean: No debug prints, no commented-out code, no dead imports, no leftover scaffolding from development.
+- Verified: Every deliverable is confirmed to work — either through automated tests or documented manual verification steps — before it is marked complete.
+
+If a task cannot be completed to this standard in a single pass, it must be decomposed into smaller sub-tasks, each of which independently meets the production-ready bar.
+
 1. Technical Stack
 
 Language: Python 3.10+ (Core logic and GUI).
