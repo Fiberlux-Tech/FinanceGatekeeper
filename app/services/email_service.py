@@ -13,12 +13,12 @@ Architectural notes:
 
 from __future__ import annotations
 
-import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Optional, Union
 
 from app.config import AppConfig, get_config
+from app.logger import StructuredLogger
 from app.models.service_models import ServiceResult
 from app.models.transaction import Transaction
 from app.repositories.user_repository import UserRepository
@@ -32,7 +32,7 @@ class EmailService(BaseService):
     def __init__(
         self,
         user_repo: UserRepository,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._user_repo = user_repo

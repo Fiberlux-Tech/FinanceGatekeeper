@@ -9,30 +9,31 @@ The following items from the original TODO have been resolved:
 - [x] `app/services/__init__.py` — `create_services(db, config)` signature updated
 - [x] `app/services/email_service.py` — Fixed `AppConfig.validate_email_config()` → `config.validate_email_config()` (was calling instance method as class method)
 
-## Deferred: Systemic `logging.Logger` → `StructuredLogger` Type Mismatch (M1)
+## Resolved: Systemic `logging.Logger` → `StructuredLogger` Type Mismatch (M1)
 
-All pre-existing services and repositories declare `logger: logging.Logger` in their constructors, but receive `StructuredLogger` at runtime. `StructuredLogger` duck-types correctly (exposes `.info()`, `.warning()`, `.error()`, etc.), so there is no runtime issue. However, static type checkers will flag the mismatch.
-
-`BaseService` has been fixed to use `StructuredLogger`. The following files still use `logging.Logger` and should be updated in a future cleanup pass:
+All services, repositories, and the `log_audit_event` utility now use `StructuredLogger` in their type hints, matching the runtime type. Static type checkers no longer flag a mismatch.
 
 ### Services
-- [ ] `app/services/email_service.py` — `logger: logging.Logger`
-- [ ] `app/services/kpi.py` — `logger: logging.Logger`
-- [ ] `app/services/jit_provisioning.py` — `logger: logging.Logger`
-- [ ] `app/services/variables.py` — `logger: logging.Logger`
-- [ ] `app/services/transaction_workflow.py` — `logger: logging.Logger`
-- [ ] `app/services/transaction_preview.py` — `logger: logging.Logger`
-- [ ] `app/services/excel_parser.py` — `logger: logging.Logger` (constructor + `safe_float()`)
-- [ ] `app/services/transaction_crud.py` — `logger: logging.Logger`
-- [ ] `app/services/users.py` — `logger: logging.Logger`
+- [x] `app/services/email_service.py` — `logger: StructuredLogger`
+- [x] `app/services/kpi.py` — `logger: StructuredLogger`
+- [x] `app/services/jit_provisioning.py` — `logger: StructuredLogger`
+- [x] `app/services/variables.py` — `logger: StructuredLogger`
+- [x] `app/services/transaction_workflow.py` — `logger: StructuredLogger`
+- [x] `app/services/transaction_preview.py` — `logger: StructuredLogger`
+- [x] `app/services/excel_parser.py` — `logger: StructuredLogger` (constructor + `safe_float()`)
+- [x] `app/services/transaction_crud.py` — `logger: StructuredLogger`
+- [x] `app/services/users.py` — `logger: StructuredLogger`
 
 ### Repositories
-- [ ] `app/repositories/base_repository.py` — `logger: logging.Logger`
-- [ ] `app/repositories/user_repository.py` — `logger: logging.Logger`
-- [ ] `app/repositories/transaction_repository.py` — `logger: logging.Logger`
-- [ ] `app/repositories/master_variable_repository.py` — `logger: logging.Logger`
-- [ ] `app/repositories/fixed_cost_repository.py` — `logger: logging.Logger`
-- [ ] `app/repositories/recurring_service_repository.py` — `logger: logging.Logger`
+- [x] `app/repositories/base_repository.py` — `logger: StructuredLogger`
+- [x] `app/repositories/user_repository.py` — `logger: StructuredLogger`
+- [x] `app/repositories/transaction_repository.py` — `logger: StructuredLogger`
+- [x] `app/repositories/master_variable_repository.py` — `logger: StructuredLogger`
+- [x] `app/repositories/fixed_cost_repository.py` — `logger: StructuredLogger`
+- [x] `app/repositories/recurring_service_repository.py` — `logger: StructuredLogger`
+
+### Utilities
+- [x] `app/utils/audit.py` — `log_audit_event(logger: StructuredLogger, ...)`
 
 ## Deferred: Static PBKDF2 Salt in Session Cache (M4)
 

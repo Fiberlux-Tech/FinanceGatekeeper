@@ -11,7 +11,7 @@ Provides shared infrastructure for all repositories:
 from __future__ import annotations
 
 import json
-import logging
+from app.logger import StructuredLogger
 import sqlite3
 from typing import Optional
 
@@ -25,7 +25,7 @@ class BaseRepository:
 
     TABLE: str = ""
 
-    def __init__(self, db: DatabaseManager, logger: logging.Logger) -> None:
+    def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         self._db = db
         self._logger = logger
         self._ensure_sync_queue_table()

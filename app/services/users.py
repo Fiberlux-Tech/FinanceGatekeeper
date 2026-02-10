@@ -13,11 +13,11 @@ Architectural notes:
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from app.auth import CurrentUser
 from app.database import DatabaseManager
+from app.logger import StructuredLogger
 from app.models.enums import UserRole
 from app.models.service_models import ServiceResult
 from app.models.user import User
@@ -33,7 +33,7 @@ class UserService(BaseService):
         self,
         repo: UserRepository,
         db: DatabaseManager,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._repo = repo

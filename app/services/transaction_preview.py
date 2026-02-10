@@ -11,11 +11,11 @@ Functions ported:
 
 from __future__ import annotations
 
-import logging
 import traceback
 from typing import Optional
 
 from app.auth import CurrentUser
+from app.logger import StructuredLogger
 from app.models.service_models import ServiceResult
 from app.services.base_service import BaseService
 from app.services.financial_engine import calculate_financial_metrics
@@ -34,7 +34,7 @@ class TransactionPreviewService(BaseService):
 
     def __init__(
         self,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
 

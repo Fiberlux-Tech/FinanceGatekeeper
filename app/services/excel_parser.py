@@ -27,7 +27,6 @@ Defensive File Handling:
 from __future__ import annotations
 
 import hashlib
-import logging
 import traceback
 from datetime import datetime, timezone
 from typing import BinaryIO, Optional, Union
@@ -38,6 +37,7 @@ from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.config import AppConfig, get_config
+from app.logger import StructuredLogger
 from app.models.service_models import ServiceResult
 from app.services.base_service import BaseService
 from app.services.financial_engine import calculate_financial_metrics
@@ -51,7 +51,7 @@ from app.utils.string_helpers import normalize_keys
 # Module-level type-safe conversion helpers
 # ---------------------------------------------------------------------------
 
-def safe_float(val: Union[int, float, str, None], logger: logging.Logger) -> float:
+def safe_float(val: Union[int, float, str, None], logger: StructuredLogger) -> float:
     """Convert a value to float, treating None, empty strings, and invalid values as 0.0.
 
     When using ``data_only=True``, openpyxl may return Excel error strings
@@ -140,7 +140,7 @@ class ExcelParserService(BaseService):
     def __init__(
         self,
         variable_service: VariableService,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         """Initialise the parser with its runtime dependencies.
 

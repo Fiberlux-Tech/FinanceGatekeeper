@@ -17,9 +17,9 @@ Architectural notes:
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
+from app.logger import StructuredLogger
 from app.models.enums import UserRole
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
@@ -47,7 +47,7 @@ class JITProvisioningService(BaseService):
     def __init__(
         self,
         repo: UserRepository,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._repo = repo

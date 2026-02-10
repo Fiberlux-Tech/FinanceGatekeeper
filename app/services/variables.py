@@ -13,11 +13,11 @@ Refactored from legacy Flask service:
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from app.auth import CurrentUser
 from app.config import AppConfig
+from app.logger import StructuredLogger
 from app.models.enums import UserRole
 from app.models.master_variable import MasterVariable
 from app.models.service_models import ServiceResult
@@ -38,7 +38,7 @@ class VariableService(BaseService):
         self,
         repo: MasterVariableRepository,
         config: AppConfig,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._repo = repo

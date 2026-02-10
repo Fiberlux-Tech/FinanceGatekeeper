@@ -13,12 +13,12 @@ Functions ported:
 
 from __future__ import annotations
 
-import logging
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
 from app.auth import CurrentUser
+from app.logger import StructuredLogger
 from app.models.enums import ApprovalStatus, UserRole
 from app.models.service_models import ServiceResult
 from app.models.transaction import Transaction
@@ -48,7 +48,7 @@ class TransactionWorkflowService(BaseService):
         recurring_service_repo: RecurringServiceRepository,
         email_service: EmailService,
         crud_service: TransactionCrudService,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._tx_repo = transaction_repo

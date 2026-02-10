@@ -9,12 +9,13 @@ audit trail entries.
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional, Union
 
 from pydantic import BaseModel, Field
+
+from app.logger import StructuredLogger
 
 __all__ = ["AuditEvent", "log_audit_event", "persist_audit_event"]
 
@@ -44,7 +45,7 @@ class AuditEvent(BaseModel):
 
 
 def log_audit_event(
-    logger: logging.Logger,
+    logger: StructuredLogger,
     action: str,
     entity_type: str,
     entity_id: str,

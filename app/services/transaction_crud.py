@@ -17,12 +17,12 @@ Functions ported:
 
 from __future__ import annotations
 
-import logging
 import traceback
 from datetime import datetime
 from typing import Optional, Union
 
 from app.auth import CurrentUser
+from app.logger import StructuredLogger
 from app.models.enums import ApprovalStatus, UserRole
 from app.models.fixed_cost import FixedCost
 from app.models.recurring_service import RecurringService
@@ -85,7 +85,7 @@ class TransactionCrudService(BaseService):
         recurring_service_repo: RecurringServiceRepository,
         email_service: EmailService,
         variable_service: VariableService,
-        logger: logging.Logger,
+        logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._tx_repo = transaction_repo

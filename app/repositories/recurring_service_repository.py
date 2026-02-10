@@ -6,7 +6,7 @@ Handles data access for RecurringService line items belonging to transactions.
 
 from __future__ import annotations
 
-import logging
+from app.logger import StructuredLogger
 from typing import Optional
 
 from app.database import DatabaseManager
@@ -20,7 +20,7 @@ class RecurringServiceRepository(BaseRepository):
 
     TABLE = "recurring_services"
 
-    def __init__(self, db: DatabaseManager, logger: logging.Logger) -> None:
+    def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
         self._ensure_sqlite_table()
 

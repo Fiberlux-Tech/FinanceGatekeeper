@@ -7,7 +7,7 @@ Variables are append-only (historical records preserved for audit trail).
 
 from __future__ import annotations
 
-import logging
+from app.logger import StructuredLogger
 from typing import Optional
 
 from app.database import DatabaseManager
@@ -21,7 +21,7 @@ class MasterVariableRepository(BaseRepository):
 
     TABLE = "master_variables"
 
-    def __init__(self, db: DatabaseManager, logger: logging.Logger) -> None:
+    def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
         self._ensure_sqlite_table()
 

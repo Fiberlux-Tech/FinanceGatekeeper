@@ -9,7 +9,7 @@ Provides aggregation methods for KPI calculations.
 from __future__ import annotations
 
 import json
-import logging
+from app.logger import StructuredLogger
 import math
 from datetime import datetime, timezone
 from typing import Optional
@@ -26,7 +26,7 @@ class TransactionRepository(BaseRepository):
 
     TABLE = "transactions"
 
-    def __init__(self, db: DatabaseManager, logger: logging.Logger) -> None:
+    def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
         self._ensure_sqlite_table()
 
