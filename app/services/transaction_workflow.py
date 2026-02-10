@@ -208,7 +208,7 @@ class TransactionWorkflowService(BaseService):
                 entity_id=transaction_id,
                 user_id=current_user.id,
                 details={
-                    "approved_by": current_user.username,
+                    "approved_by": current_user.full_name,
                     "client_name": transaction.client_name,
                 },
             )
@@ -340,7 +340,7 @@ class TransactionWorkflowService(BaseService):
                 entity_id=transaction_id,
                 user_id=current_user.id,
                 details={
-                    "rejected_by": current_user.username,
+                    "rejected_by": current_user.full_name,
                     "client_name": transaction.client_name,
                     "rejection_note": rejection_note or "",
                 },
@@ -442,7 +442,7 @@ class TransactionWorkflowService(BaseService):
                 entity_type="Transaction",
                 entity_id=transaction_id,
                 user_id=current_user.id,
-                details={"recalculated_by": current_user.username},
+                details={"recalculated_by": current_user.full_name},
             )
 
             # 5. Return the full, updated transaction details

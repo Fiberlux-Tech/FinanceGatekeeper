@@ -6,6 +6,10 @@ All configuration is loaded from environment variables and .env files.
 Inject an AppConfig instance via dependency injection where needed.
 """
 
+from __future__ import annotations
+
+from typing import Optional
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -84,3 +88,24 @@ class AppConfig(BaseSettings):
             raise ValueError("MAIL_USERNAME and MAIL_PASSWORD must be set")
         if not self.MAIL_SERVER:
             raise ValueError("MAIL_SERVER must be set")
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton factory
+# ---------------------------------------------------------------------------
+
+_config_instance: Optional[AppConfig] = None
+
+
+def get_config() -> AppConfig:
+    """Return a cached ``AppConfig`` singleton.
+
+    On first call, creates an ``AppConfig`` instance (reading from ``.env``).
+    Subsequent calls return the same instance.  Prefer direct constructor
+    injection of ``AppConfig`` in new code; this factory exists for
+    backward-compatibility with modules that import ``get_config()``.
+    """
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = AppConfig()
+    return _config_instance

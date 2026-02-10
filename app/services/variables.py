@@ -17,7 +17,7 @@ import logging
 from typing import Optional
 
 from app.auth import CurrentUser
-from app.config import get_config
+from app.config import AppConfig
 from app.models.enums import UserRole
 from app.models.master_variable import MasterVariable
 from app.models.service_models import ServiceResult
@@ -37,10 +37,12 @@ class VariableService(BaseService):
     def __init__(
         self,
         repo: MasterVariableRepository,
+        config: AppConfig,
         logger: logging.Logger,
     ) -> None:
         super().__init__(logger)
         self._repo = repo
+        self._config = config
 
     def get_all_master_variables(
         self,
@@ -107,9 +109,8 @@ class VariableService(BaseService):
         Returns:
             ServiceResult with a success message or an appropriate error.
         """
-        config = get_config()
         variable_config: Optional[dict[str, str]] = (
-            config.MASTER_VARIABLE_ROLES.get(variable_name)
+            self._config.MASTER_VARIABLE_ROLES.get(variable_name)
         )
 
         # 1. Validate that the variable name is registered

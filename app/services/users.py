@@ -52,7 +52,7 @@ class UserService(BaseService):
             user_list: list[dict[str, object]] = [
                 {
                     "id": user.id,
-                    "username": user.username,
+                    "full_name": user.full_name,
                     "email": user.email,
                     "role": str(user.role),
                 }
@@ -135,7 +135,7 @@ class UserService(BaseService):
         # --- 4. CRITICAL: Sync Supabase Auth user_metadata ---
         self._sync_supabase_metadata(
             user_id=user_id,
-            username=updated_user.username,
+            full_name=updated_user.full_name,
             role=validated_role,
         )
 
@@ -149,14 +149,14 @@ class UserService(BaseService):
             details={
                 "old_role": old_role,
                 "new_role": str(validated_role),
-                "performed_by": current_user.username,
+                "performed_by": current_user.full_name,
             },
         )
 
         return ServiceResult(
             success=True,
             data={
-                "message": f"Role for user {updated_user.username} updated to {validated_role}.",
+                "message": f"Role for user {updated_user.full_name} updated to {validated_role}.",
             },
         )
 
@@ -224,13 +224,13 @@ class UserService(BaseService):
             entity_type="User",
             entity_id=user_id,
             user_id=current_user.id,
-            details={"performed_by": current_user.username},
+            details={"performed_by": current_user.full_name},
         )
 
-        self._logger.info("Password reset for user %s", user.username)
+        self._logger.info("Password reset for user %s", user.full_name)
         return ServiceResult(
             success=True,
-            data={"message": f"Password for user {user.username} successfully reset."},
+            data={"message": f"Password for user {user.full_name} successfully reset."},
         )
 
     # ------------------------------------------------------------------
@@ -240,11 +240,11 @@ class UserService(BaseService):
     def _sync_supabase_metadata(
         self,
         user_id: str,
-        username: str,
+        full_name: str,
         role: UserRole,
     ) -> None:
         """
-        Push role/username into Supabase Auth user_metadata.
+        Push role/full_name into Supabase Auth user_metadata.
 
         This is a best-effort operation: if Supabase is unreachable the local
         database already holds the correct value and will be re-synced on the
@@ -255,13 +255,13 @@ class UserService(BaseService):
                 user_id,
                 {
                     "user_metadata": {
-                        "username": username,
+                        "full_name": full_name,
                         "role": str(role),
                     }
                 },
             )
             self._logger.info(
-                "Updated Supabase metadata for %s: role=%s", username, role,
+                "Updated Supabase metadata for %s: role=%s", full_name, role,
             )
         except RuntimeError:
             self._logger.warning(
@@ -270,5 +270,5 @@ class UserService(BaseService):
             )
         except Exception as exc:
             self._logger.error(
-                "Failed to update Supabase metadata for %s: %s", username, exc,
+                "Failed to update Supabase metadata for %s: %s", full_name, exc,
             )

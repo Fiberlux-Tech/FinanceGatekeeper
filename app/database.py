@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 from supabase import create_client, Client as SupabaseClient
 
@@ -44,12 +45,20 @@ class DatabaseManager:
     Fully configured at construction time via dependency injection.  No
     separate ``init_*`` methods are required.
 
+    When ``supabase_url`` or ``supabase_key`` is empty the Supabase client
+    is **not** created and the application runs in offline mode.  All
+    repository code already wraps Supabase calls in ``try/except`` with
+    SQLite fallback, so the ``RuntimeError`` raised by the ``supabase``
+    property is caught naturally by the existing error-handling paths.
+
     Parameters
     ----------
     supabase_url:
         The Supabase project URL (e.g. ``https://xyz.supabase.co``).
+        May be empty to run in offline mode.
     supabase_key:
         The Supabase anonymous / service-role key.
+        May be empty to run in offline mode.
     sqlite_path:
         Filesystem path for the local SQLite database file.  Parent
         directories must already exist.
@@ -65,7 +74,24 @@ class DatabaseManager:
         logger: StructuredLogger,
     ) -> None:
         self._logger: StructuredLogger = logger
-        self._supabase: SupabaseClient = create_client(supabase_url, supabase_key)
+
+        # --- Supabase (optional — offline-first) ---
+        self._supabase: Optional[SupabaseClient] = None
+        if supabase_url and supabase_key:
+            try:
+                self._supabase = create_client(supabase_url, supabase_key)
+                self._logger.info("Supabase client initialized.")
+            except Exception as exc:
+                self._logger.warning(
+                    "Supabase initialization failed: %s. Running in offline mode.",
+                    exc,
+                )
+        else:
+            self._logger.warning(
+                "Supabase credentials not configured — running in offline mode."
+            )
+
+        # --- SQLite (always required) ---
         self._sqlite_conn: sqlite3.Connection = self._connect_sqlite(sqlite_path)
 
     # ------------------------------------------------------------------
@@ -74,8 +100,26 @@ class DatabaseManager:
 
     @property
     def supabase(self) -> SupabaseClient:
-        """Return the initialised Supabase client."""
+        """Return the initialised Supabase client.
+
+        Raises
+        ------
+        RuntimeError
+            If the Supabase client was not initialised (offline mode).
+            All repository code wraps Supabase calls in ``try/except``
+            so this exception triggers the SQLite fallback path.
+        """
+        if self._supabase is None:
+            raise RuntimeError(
+                "Supabase client is not initialised. "
+                "The application is running in offline mode."
+            )
         return self._supabase
+
+    @property
+    def is_online(self) -> bool:
+        """``True`` when the Supabase client is available."""
+        return self._supabase is not None
 
     @property
     def sqlite(self) -> sqlite3.Connection:
@@ -85,6 +129,21 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     # Lifecycle helpers
     # ------------------------------------------------------------------
+
+    def get_pending_sync_count(self) -> int:
+        """Return the number of pending items in the sync queue.
+
+        Returns ``0`` when the table does not exist yet or the query
+        fails for any reason, making it safe to call at any point
+        during the application lifecycle.
+        """
+        try:
+            row = self._sqlite_conn.execute(
+                "SELECT COUNT(*) AS cnt FROM sync_queue WHERE status = 'pending'",
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
+        except Exception:
+            return 0
 
     def close(self) -> None:
         """Close the local SQLite connection.

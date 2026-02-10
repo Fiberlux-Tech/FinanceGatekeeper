@@ -60,7 +60,7 @@ class EmailService(BaseService):
         # Lazy validation: check email config once per service lifetime
         if not self._validated:
             try:
-                AppConfig.validate_email_config()
+                config.validate_email_config()
                 self._validated = True
             except ValueError as exc:
                 self._logger.error("Email configuration error: %s", exc)
@@ -158,7 +158,7 @@ class EmailService(BaseService):
             )
 
         # Look up the salesman's email via the repository
-        sales_user = self._user_repo.get_by_username(transaction.salesman)
+        sales_user = self._user_repo.get_by_full_name(transaction.salesman)
 
         if sales_user is None or not sales_user.email:
             self._logger.warning(

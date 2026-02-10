@@ -30,19 +30,45 @@ Sync Worker: A background thread monitors connectivity and pushes pending record
 
 State Recovery: On startup, the app checks the SQLite DB for unsynced data and attempts to resume ingestion.
 
-C. Repository & Service Layer
+C. Relational Deal Model (Header-Detail)
+
+The core data model uses three tables linked by `transaction_id`:
+
+1. `transactions` (Header): The parent record. Stores client metadata, overall deal status, SHA-256 file hash, financial summary fields (NPV, IRR, commissions, gross margin), and approval state.
+
+2. `fixed_costs` (Detail): Child table for one-off implementation costs. Foreign key to `transactions.id`. Supports unlimited cost lines per deal. Fields include category, service type, location, quantity, unit cost with currency conversion (original + PEN).
+
+3. `recurring_services` (Detail): Child table for MRR/subscription line items. Foreign key to `transactions.id`. Supports unlimited service lines per deal. Fields include service type, quantity, multi-currency pricing (original + PEN), and provider.
+
+Atomicity Rule: When writing a deal, the header and ALL detail rows must be inserted within a single database transaction. Never create orphaned detail rows.
+
+Precision Requirements: Financial fields use REAL in SQLite and NUMERIC/BIGINT in Supabase PostgreSQL to maintain professional-grade precision for NPV/IRR calculations.
+
+D. Repository & Service Layer
 
 Repository Pattern: UI layer is decoupled from data sources. All data access must go through a Repository layer (e.g., SalesRepository) which abstracts the source (SQLite, Excel, or Supabase).
 
 Service Layer: Encapsulates complex financial rules (NPV/IRR/Commissions) into pure Python Service classes.
 
-D. User-Triggered Re-validation (Manual Refresh)
+E. Schema Deployment Strategy (Two-Step Process)
+
+Tables are not created ad-hoc. Each schema change follows a controlled process:
+
+1. SQL Migration Script: A versioned `.sql` file defining tables, foreign keys, indexes, and Row Level Security (RLS) policies. Executed in the Supabase SQL Editor.
+
+2. Local Sync Schema: The Python Initialization Service (`app/schema.py`) checks the local `gatekeeper_local.db` on startup. If the schema version is behind, it applies the new table definitions idempotently. The `schema_version` table tracks applied migrations.
+
+F. User-Triggered Re-validation (Manual Refresh)
 
 Each file card features a "Refresh" action allowing users to modify the Excel file locally (for metric compliance) and force a re-parse. This invalidates the old SHA-256 hash and re-runs the financial engine.
 
-E. Command Pattern (Atomic Transactions)
+G. Command Pattern (Atomic Transactions)
 
-Operations involving multiple steps (Approve/Reject) are encapsulated in Command objects. This ensures atomic execution (Move -> Rename -> Encrypt -> DB Write) and provides a clear path for rollbacks.
+Operations involving multiple steps (Approve/Reject) are encapsulated in Command objects. This ensures atomic execution (Move -> Rename -> Encrypt -> DB Write for header + all detail rows) and provides a clear path for rollbacks.
+
+H. Identity Strategy (Email-as-Primary-Key)
+
+Email Address serves as the Username across the system. Since email is the unique identifier in Supabase Auth, we mirror it in the `profiles` table to eliminate handle confusion and prevent identity collisions in the Audit Trail. Full Name is captured separately for display in UI cards and logs.
 
 3. "Pro Move" Safety & Integrity
 

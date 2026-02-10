@@ -17,7 +17,7 @@ class User(BaseModel):
 
     id: str  # Supabase UUID
     email: str
-    username: str
+    full_name: str
     role: UserRole
 
     model_config = {"from_attributes": True}

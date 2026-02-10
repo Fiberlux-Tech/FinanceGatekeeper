@@ -12,9 +12,9 @@ consume without knowing the internal dependency graph.
 
 from __future__ import annotations
 
-import logging
 from typing import TypedDict
 
+from app.config import AppConfig
 from app.database import DatabaseManager
 from app.logger import get_logger
 from app.repositories.fixed_cost_repository import FixedCostRepository
@@ -47,7 +47,7 @@ class ServiceContainer(TypedDict):
     transaction_preview_service: TransactionPreviewService
 
 
-def create_services(db: DatabaseManager) -> ServiceContainer:
+def create_services(db: DatabaseManager, config: AppConfig) -> ServiceContainer:
     """
     Wire all repositories and services together.
 
@@ -57,11 +57,12 @@ def create_services(db: DatabaseManager) -> ServiceContainer:
 
     Args:
         db: Initialised DatabaseManager with Supabase + SQLite ready.
+        config: Application configuration (injected into services that need it).
 
     Returns:
         ServiceContainer mapping service names to fully-wired instances.
     """
-    logger: logging.Logger = get_logger("services")
+    logger = get_logger("services")
 
     # ------------------------------------------------------------------
     # 1. Repositories (data-access layer)
@@ -77,6 +78,7 @@ def create_services(db: DatabaseManager) -> ServiceContainer:
     # ------------------------------------------------------------------
     variable_service = VariableService(
         repo=variable_repo,
+        config=config,
         logger=logger,
     )
     user_service = UserService(

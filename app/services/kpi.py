@@ -59,10 +59,10 @@ class KPIService(BaseService):
             current_user: The authenticated user making the request.
 
         Returns:
-            The salesman username to filter by, or None for unrestricted access.
+            The salesman full_name to filter by, or None for unrestricted access.
         """
         if current_user.role == UserRole.SALES:
-            return current_user.username
+            return current_user.full_name
         return None
 
     # ------------------------------------------------------------------
@@ -178,7 +178,7 @@ class KPIService(BaseService):
                         pending_aggs.get("total_pending_mrc", 0.0),
                     ),
                     "user_role": current_user.role,
-                    "username": current_user.username,
+                    "full_name": current_user.full_name,
                 },
             )
         except Exception as exc:
@@ -223,7 +223,7 @@ class KPIService(BaseService):
                         pending_aggs.get("pending_count", 0),
                     ),
                     "user_role": current_user.role,
-                    "username": current_user.username,
+                    "full_name": current_user.full_name,
                 },
             )
         except Exception as exc:
@@ -270,7 +270,7 @@ class KPIService(BaseService):
                         pending_aggs.get("total_pending_comisiones", 0.0),
                     ),
                     "user_role": current_user.role,
-                    "username": current_user.username,
+                    "full_name": current_user.full_name,
                 },
             )
         except Exception as exc:
@@ -320,7 +320,7 @@ class KPIService(BaseService):
                 data={
                     "average_gross_margin_ratio": avg_margin,
                     "user_role": current_user.role,
-                    "username": current_user.username,
+                    "full_name": current_user.full_name,
                     "filters": {
                         "months_back": months_back,
                         "status_filter": status_filter,

@@ -33,7 +33,7 @@ class UserRepository(BaseRepository):
             CREATE TABLE IF NOT EXISTS {self.TABLE} (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL,
-                username TEXT NOT NULL,
+                full_name TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'SALES'
             )
             """
@@ -65,13 +65,13 @@ class UserRepository(BaseRepository):
             return User(**dict(row))
         return None
 
-    def get_by_username(self, username: str) -> Optional[User]:
-        """Fetch a user by username. Tries Supabase first, falls back to SQLite."""
+    def get_by_full_name(self, full_name: str) -> Optional[User]:
+        """Fetch a user by full_name. Tries Supabase first, falls back to SQLite."""
         try:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
-                .eq("username", username)
+                .eq("full_name", full_name)
                 .maybe_single()
                 .execute()
             )
@@ -80,10 +80,10 @@ class UserRepository(BaseRepository):
                 self._cache_to_sqlite(user)
                 return user
         except Exception as exc:
-            self._logger.warning("Supabase unavailable for username lookup: %s", exc)
+            self._logger.warning("Supabase unavailable for full_name lookup: %s", exc)
 
         row = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE username = ?", (username,)
+            f"SELECT * FROM {self.TABLE} WHERE full_name = ?", (full_name,)
         ).fetchone()
         if row:
             return User(**dict(row))
@@ -94,7 +94,7 @@ class UserRepository(BaseRepository):
         try:
             response = (
                 self.supabase.table(self.TABLE)
-                .select("id, email, username, role")
+                .select("id, email, full_name, role")
                 .execute()
             )
             users = [User(**normalize_keys(row)) for row in response.data]
@@ -105,7 +105,7 @@ class UserRepository(BaseRepository):
             self._logger.warning("Supabase unavailable for get_all users: %s", exc)
 
         rows = self.sqlite.execute(
-            f"SELECT id, email, username, role FROM {self.TABLE}"
+            f"SELECT id, email, full_name, role FROM {self.TABLE}"
         ).fetchall()
         return [User(**dict(row)) for row in rows]
 
@@ -158,14 +158,14 @@ class UserRepository(BaseRepository):
         """Write user to local SQLite cache for offline access."""
         self.sqlite.execute(
             f"""
-            INSERT INTO {self.TABLE} (id, email, username, role)
+            INSERT INTO {self.TABLE} (id, email, full_name, role)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 email = excluded.email,
-                username = excluded.username,
+                full_name = excluded.full_name,
                 role = excluded.role
             """,
-            (user.id, user.email, user.username, str(user.role)),
+            (user.id, user.email, user.full_name, str(user.role)),
         )
         self.sqlite.commit()
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from typing import Optional, Union
 
 from pydantic import BaseModel, Field
 
-__all__ = ["AuditEvent", "log_audit_event"]
+__all__ = ["AuditEvent", "log_audit_event", "persist_audit_event"]
 
 # ---------------------------------------------------------------------------
 # Scalar type permitted inside the ``details`` mapping.  Kept deliberately
@@ -77,3 +78,58 @@ def log_audit_event(
         details=details or {},
     )
     logger.info("AUDIT: %s", json.dumps(event.model_dump(), default=str))
+
+
+def persist_audit_event(
+    conn: sqlite3.Connection,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user_id: str,
+    details: Optional[dict[str, DetailValue]] = None,
+) -> None:
+    """Write an audit event to the SQLite ``audit_log`` table.
+
+    Complements ``log_audit_event()`` by providing persistent,
+    queryable audit storage for the Timeline Dashboard (Phase 5).
+    The event is Pydantic-validated before insertion.
+
+    The function constructs an :class:`AuditEvent`, which performs full
+    Pydantic validation, and then writes the validated fields into the
+    ``audit_log`` table.  If validation fails a
+    :class:`pydantic.ValidationError` will propagate to the caller --
+    this is intentional so that malformed audit data is never silently
+    persisted.
+
+    Args:
+        conn: An open SQLite connection with write access.
+        action: What happened (e.g. ``"CREATE"``, ``"APPROVE"``).
+        entity_type: Type of entity affected (e.g. ``"Transaction"``).
+        entity_id: Primary key of the affected entity.
+        user_id: ID of the user who performed the action.
+        details: Optional additional context (e.g. old/new values).
+    """
+    event = AuditEvent(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        user_id=user_id,
+        details=details or {},
+    )
+
+    conn.execute(
+        """
+        INSERT INTO audit_log (timestamp, action, entity_type, entity_id, user_id, details)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.timestamp,
+            event.action,
+            event.entity_type,
+            event.entity_id,
+            event.user_id,
+            json.dumps(event.details, default=str),
+        ),
+    )
+    conn.commit()

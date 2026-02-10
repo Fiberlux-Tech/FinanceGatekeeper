@@ -264,7 +264,7 @@ class TransactionCrudService(BaseService):
         """
         Saves a new transaction and its related costs to the database.
 
-        Overwrites the 'salesman' field with the currently logged-in user's username.
+        Overwrites the 'salesman' field with the currently logged-in user's full_name.
         Recalculates financial metrics on the backend to ensure the database always
         has correct calculated values (prevents frontend calculation errors).
 
@@ -289,7 +289,7 @@ class TransactionCrudService(BaseService):
                 )
 
             # --- Salesman overwrite: use authenticated user ---
-            tx_data["salesman"] = current_user.username
+            tx_data["salesman"] = current_user.full_name
 
             # --- Recalculate metrics on backend ---
             clean_metrics: dict[str, object] = {}
@@ -441,7 +441,7 @@ class TransactionCrudService(BaseService):
             self._logger.info(
                 "Transaction created with ID: %s by user %s",
                 new_id,
-                current_user.username,
+                current_user.full_name,
             )
 
             # Audit trail
@@ -454,14 +454,14 @@ class TransactionCrudService(BaseService):
                 details={
                     "client_name": tx_data.get("client_name"),
                     "unidad_negocio": tx_data.get("unidad_negocio"),
-                    "salesman": current_user.username,
+                    "salesman": current_user.full_name,
                 },
             )
 
             # Send submission email (non-blocking: log error but do not fail)
             try:
                 self._email_service.send_new_transaction_email(
-                    salesman_name=current_user.username,
+                    salesman_name=current_user.full_name,
                     client_name=tx_data.get("client_name", "N/A"),
                     salesman_email=current_user.email,
                 )
@@ -525,7 +525,7 @@ class TransactionCrudService(BaseService):
             # RBAC: SALES users only see their own transactions
             salesman_filter: Optional[str] = None
             if current_user.role == UserRole.SALES:
-                salesman_filter = current_user.username
+                salesman_filter = current_user.full_name
 
             result: dict[str, object] = self._tx_repo.get_paginated(
                 page=page,
@@ -597,7 +597,7 @@ class TransactionCrudService(BaseService):
                 )
 
             # RBAC: SALES users can only load their own transactions
-            if current_user.role == UserRole.SALES and transaction.salesman != current_user.username:
+            if current_user.role == UserRole.SALES and transaction.salesman != current_user.full_name:
                 return ServiceResult(
                     success=False,
                     error="Transaction not found or access denied.",
@@ -749,7 +749,7 @@ class TransactionCrudService(BaseService):
                 )
 
             # 3. Access control: SALES can only edit their own transactions
-            if current_user.role == UserRole.SALES and transaction.salesman != current_user.username:
+            if current_user.role == UserRole.SALES and transaction.salesman != current_user.full_name:
                 return ServiceResult(
                     success=False,
                     error="You do not have permission to edit this transaction.",
@@ -771,7 +771,7 @@ class TransactionCrudService(BaseService):
                 entity_type="Transaction",
                 entity_id=transaction_id,
                 user_id=current_user.id,
-                details={"updated_by": current_user.username},
+                details={"updated_by": current_user.full_name},
             )
 
             # 7. Return the updated transaction details
@@ -839,7 +839,7 @@ class TransactionCrudService(BaseService):
                 "unidad_negocio": "",
                 "client_name": "",
                 "company_id": "",
-                "salesman": current_user.username,
+                "salesman": current_user.full_name,
                 "order_id": "",
                 "tipo_cambio": master_vars["tipo_cambio"],
                 "mrc_original": 0,

@@ -5,7 +5,7 @@ Ensures that authenticated users (verified via Supabase JWT) are automatically
 synchronized to the local database via the UserRepository.
 
 Sync strategy:
-    - Always sync metadata on every request (email, username, role).
+    - Always sync metadata on every request (email, full_name, role).
     - Use UUID from JWT 'sub' claim for lookups (indexed).
     - Fail authentication if provisioning fails (strict mode).
 
@@ -41,7 +41,7 @@ class JITProvisioningService(BaseService):
     Service that synchronises Supabase Auth JWT claims to the local user table.
 
     Called on every authenticated request to ensure the local database
-    reflects the latest JWT metadata (email, username, role).
+    reflects the latest JWT metadata (email, full_name, role).
     """
 
     def __init__(
@@ -56,7 +56,7 @@ class JITProvisioningService(BaseService):
         self,
         user_id: str,
         email: str,
-        username: str,
+        full_name: str,
         role: str,
     ) -> User:
         """
@@ -68,7 +68,7 @@ class JITProvisioningService(BaseService):
         Args:
             user_id: Supabase UUID from JWT 'sub' claim.
             email: Email from JWT 'email' claim.
-            username: Username from JWT 'user_metadata.username'.
+            full_name: Full name from JWT 'user_metadata.full_name'.
             role: Role string from JWT 'user_metadata.role'.
 
         Returns:
@@ -89,18 +89,18 @@ class JITProvisioningService(BaseService):
             self._logger.warning(
                 "JIT Provisioning: Invalid role '%s' for user %s. Defaulting to SALES.",
                 role,
-                username,
+                full_name,
             )
             validated_role = UserRole.SALES
 
         try:
-            return self._sync_user(user_id, email, username, validated_role)
+            return self._sync_user(user_id, email, full_name, validated_role)
         except JITProvisioningError:
             raise
         except Exception as exc:
             self._logger.error(
                 "JIT Provisioning: Unexpected error syncing user %s. Error: %s",
-                username,
+                full_name,
                 exc,
                 exc_info=True,
             )
@@ -117,7 +117,7 @@ class JITProvisioningService(BaseService):
         self,
         user_id: str,
         email: str,
-        username: str,
+        full_name: str,
         role: UserRole,
     ) -> User:
         """
@@ -130,15 +130,15 @@ class JITProvisioningService(BaseService):
         existing_user: Optional[User] = self._repo.get_by_id(user_id)
 
         if existing_user is None:
-            return self._provision_new_user(user_id, email, username, role)
+            return self._provision_new_user(user_id, email, full_name, role)
 
-        return self._sync_existing_user(existing_user, email, username, role)
+        return self._sync_existing_user(existing_user, email, full_name, role)
 
     def _provision_new_user(
         self,
         user_id: str,
         email: str,
-        username: str,
+        full_name: str,
         role: UserRole,
     ) -> User:
         """
@@ -149,13 +149,13 @@ class JITProvisioningService(BaseService):
         lookup. If the retry also returns None, we raise.
         """
         self._logger.info(
-            "JIT Provisioning: Creating new user %s (ID: %s)", username, user_id,
+            "JIT Provisioning: Creating new user %s (ID: %s)", full_name, user_id,
         )
 
         new_user = User(
             id=user_id,
             email=email,
-            username=username,
+            full_name=full_name,
             role=role,
         )
 
@@ -166,25 +166,25 @@ class JITProvisioningService(BaseService):
             self._logger.warning(
                 "JIT Provisioning: Race condition detected for %s. "
                 "Retrying lookup. Error: %s",
-                username,
+                full_name,
                 exc,
             )
 
             retried_user: Optional[User] = self._repo.get_by_id(user_id)
             if retried_user is None:
                 raise JITProvisioningError(
-                    f"Failed to create user {username} due to integrity constraint",
+                    f"Failed to create user {full_name} due to integrity constraint",
                     original_error=exc,
                 )
 
             self._logger.info(
                 "JIT Provisioning: User %s found on retry after race condition.",
-                username,
+                full_name,
             )
             return retried_user
 
         self._logger.info(
-            "JIT Provisioning: Successfully created user %s", username,
+            "JIT Provisioning: Successfully created user %s", full_name,
         )
 
         log_audit_event(
@@ -193,7 +193,7 @@ class JITProvisioningService(BaseService):
             entity_type="User",
             entity_id=user_id,
             user_id=user_id,
-            details={"email": email, "username": username, "role": str(role)},
+            details={"email": email, "full_name": full_name, "role": str(role)},
         )
 
         return created_user
@@ -202,7 +202,7 @@ class JITProvisioningService(BaseService):
         self,
         user: User,
         email: str,
-        username: str,
+        full_name: str,
         role: UserRole,
     ) -> User:
         """
@@ -214,7 +214,7 @@ class JITProvisioningService(BaseService):
 
         needs_update: bool = False
         updated_email: str = user.email
-        updated_username: str = user.username
+        updated_full_name: str = user.full_name
         updated_role: UserRole = user.role
 
         if user.email != email:
@@ -222,9 +222,9 @@ class JITProvisioningService(BaseService):
             updated_email = email
             needs_update = True
 
-        if user.username != username:
-            changes.append(f"username: {user.username} -> {username}")
-            updated_username = username
+        if user.full_name != full_name:
+            changes.append(f"full_name: {user.full_name} -> {full_name}")
+            updated_full_name = full_name
             needs_update = True
 
         if user.role != role:
@@ -237,7 +237,7 @@ class JITProvisioningService(BaseService):
 
         self._logger.info(
             "JIT Provisioning: Syncing metadata for %s (ID: %s). Changes: %s",
-            username,
+            full_name,
             user.id,
             ", ".join(changes),
         )
@@ -245,7 +245,7 @@ class JITProvisioningService(BaseService):
         updated_user = User(
             id=user.id,
             email=updated_email,
-            username=updated_username,
+            full_name=updated_full_name,
             role=updated_role,
         )
 
@@ -253,12 +253,12 @@ class JITProvisioningService(BaseService):
             synced_user: User = self._repo.upsert(updated_user)
         except Exception as exc:
             raise JITProvisioningError(
-                f"Failed to sync user {username}: duplicate email or username",
+                f"Failed to sync user {full_name}: duplicate email or full_name",
                 original_error=exc,
             )
 
         self._logger.info(
-            "JIT Provisioning: Successfully synced user %s", username,
+            "JIT Provisioning: Successfully synced user %s", full_name,
         )
 
         log_audit_event(
