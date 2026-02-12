@@ -113,6 +113,9 @@ class Transaction(BaseModel):
     # Chain of Custody (CLAUDE.md §5)
     file_sha256: Optional[str] = None
 
+    # User who submitted this deal (Supabase UUID, set at creation)
+    created_by: Optional[str] = None
+
     # Metadata
     master_variables_snapshot: Optional[MasterVariablesSnapshot] = None
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
@@ -127,7 +130,7 @@ class Transaction(BaseModel):
 
     @field_validator("master_variables_snapshot", mode="before")
     @classmethod
-    def parse_snapshot(cls, v: object) -> Optional[MasterVariablesSnapshot]:
+    def parse_snapshot(cls: type[Transaction], v: object) -> Optional[MasterVariablesSnapshot]:
         if v is None:
             return None
         if isinstance(v, dict):
@@ -136,7 +139,7 @@ class Transaction(BaseModel):
 
     @field_validator("financial_cache", mode="before")
     @classmethod
-    def parse_financial_cache(cls, v: object) -> Optional[FinancialCache]:
+    def parse_financial_cache(cls: type[Transaction], v: object) -> Optional[FinancialCache]:
         if v is None:
             return None
         if isinstance(v, dict):

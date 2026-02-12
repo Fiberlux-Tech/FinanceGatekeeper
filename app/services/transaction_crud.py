@@ -323,6 +323,7 @@ class TransactionCrudService(BaseService):
             # Create the main Transaction object
             new_transaction = Transaction(
                 id=unique_id,
+                created_by=current_user.id,
                 unidad_negocio=tx_data.get("unidad_negocio", ""),
                 client_name=tx_data.get("client_name", ""),
                 company_id=tx_data.get("company_id"),

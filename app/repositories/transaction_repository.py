@@ -572,6 +572,7 @@ class TransactionRepository(BaseRepository):
         "gigalan_sale_type",
         "gigalan_old_mrc",
         "file_sha256",
+        "created_by",
         "master_variables_snapshot",
         "approval_status",
         "submission_date",

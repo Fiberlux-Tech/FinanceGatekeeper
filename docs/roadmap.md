@@ -36,15 +36,15 @@ Phase 2: Observer & Native Interaction (COMPLETE)
 
 ---
 
-Phase 3: Parsing & Card UI (The "Filter")
+Phase 3: Parsing & Card UI (The "Filter") (COMPLETE)
 
-[ ] Excel Parser Refactor: Update parser to handle local file paths and extract metadata.
+[x] Excel Parser Refactor: Added `extract_metadata(path)` for lightweight header-only parsing (~50ms) and `process_local_file(path)` for full pipeline from filesystem paths. Optional `file_guards` dependency for lock/sync safety checks. Fixed pre-existing `_NUMERIC_FIELDS` key casing bug in `_extract_header_data()`.
 
-[ ] Card Engine: Build the scrollable Card UI featuring broad info and "Refresh" button.
+[x] Card Engine: Master-detail split panel (`InboxCardView`) with scrollable `FileCard` list (left) and `DetailPanel` (right). Cards show client name, MRC, salesman, and date. Detail panel shows financial summary, chain of custody, metadata, and action buttons. `InboxScanService` orchestrates scanning with per-file error isolation. All I/O on worker threads with `self.after()` marshalling. Watchdog events debounced at 500ms per path.
 
-[ ] Hashing Engine: Generate SHA-256 fingerprints for every file ingestion and update.
+[x] Hashing Engine: SHA-256 fingerprints computed via `FileGuardsService.compute_sha256()` during `InboxScanService.scan_inbox()` and `scan_single_file()`. Hash displayed in detail panel Chain of Custody section. Recomputed on every file refresh/modification event.
 
-[ ] Connectivity Dot: Real-time UI indicator for Sync Status (Green/Yellow/Red).
+[x] Connectivity Dot: Global sync status indicator already implemented in Phase 2 `StatusBar` (Green=online, Yellow=pending sync, Red=offline). Per-card file status dots (Ready/Locked/Syncing) added in Phase 3 `FileCard` and `DetailPanel` components.
 
 Phase 4: Relational Transaction Engine (Mid-Project)
 
@@ -55,14 +55,15 @@ Table Creation (Two-Step Process):
 2. Local Sync Schema: Python Initialization Service builds the identical structure in gatekeeper_local.db on first run.
 
 Core Tables:
-- transactions (Header): Client metadata, deal status, SHA-256 file hash, financial summaries (NPV, IRR, commissions), approval state.
+- transactions (Header): Client metadata, deal status, SHA-256 file hash, financial summaries (NPV, IRR, commissions), approval state. Includes `created_by UUID` FK to profiles for user-based RLS.
 - fixed_costs (Detail): One-off implementation costs linked to transactions via transaction_id. Supports infinite scalability per deal.
 - recurring_services (Detail): MRR/subscription data linked to transactions via transaction_id. Multi-currency pricing and provider tracking.
 - audit_logs: Structured JSON history of every decision (User ID, Action, File Hash, Timestamp).
+- master_variables: Append-only historical record of system-wide financial rates.
 
-[ ] Service Layer: Port the Math Engine (NPV/IRR/Commissions) into pure Python services.
+[x] Service Layer: Port the Math Engine (NPV/IRR/Commissions) into pure Python services. Implemented as stateless, type-safe functions in `app/services/financial_engine.py` (orchestrator), `app/utils/math_utils.py` (NPV/IRR), and `app/services/commission_rules.py` (business-unit rules). ESTADO and GIGALAN commission rules complete; CORPORATIVO and MAYORISTA return 0.0 pending Finance team rate tables. Actively consumed by TransactionCrudService, TransactionWorkflowService, TransactionPreviewService, and ExcelParserService.
 
-[ ] Relational Schema Deployment: Create transactions, fixed_costs, recurring_services, and audit_logs tables in Supabase and SQLite. IMPORTANT: The Supabase transactions CREATE TABLE must include the `file_sha256 TEXT` column (Chain of Custody, CLAUDE.md §5). The local SQLite schema and Pydantic model already have this field — the cloud migration must match.
+[x] Relational Schema Deployment: Supabase migration 004 (`20250104000000_relational_transaction_engine.sql`) creates all 5 tables (transactions, fixed_costs, recurring_services, audit_logs, master_variables) with NUMERIC(18,6) precision for financial amounts, NUMERIC(10,6) for rates/ratios, JSONB for cached computations, CHECK constraints on currencies and approval_status, foreign keys with CASCADE deletes, 10 indexes, `updated_at` trigger, and 20 RLS policies (service_role full access, SALES sees own transactions via `created_by`, FINANCE/ADMIN sees all). Local SQLite schema bumped to v10 with `created_by TEXT` column added to transactions. Pydantic Transaction model and repository `_SQLITE_COLUMNS` updated to match.
 
 [ ] Approval Command: Atomic sequence of Hash -> Rename -> Encrypt -> Move to 02_ARCHIVE_APPROVED/{year}/{BU}/ -> Local DB Write (header + all detail rows).
 

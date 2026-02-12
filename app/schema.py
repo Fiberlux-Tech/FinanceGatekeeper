@@ -54,7 +54,7 @@ __all__ = ["CURRENT_SCHEMA_VERSION", "initialize_schema"]
 # ---------------------------------------------------------------------------
 # Schema version -- bump this whenever a migration is added.
 # ---------------------------------------------------------------------------
-CURRENT_SCHEMA_VERSION: int = 8
+CURRENT_SCHEMA_VERSION: int = 10
 
 # ---------------------------------------------------------------------------
 # DDL statements for every table in the local database.
@@ -148,7 +148,8 @@ _TABLE_DEFINITIONS: list[str] = [
         approval_date TIMESTAMP,
         rejection_note TEXT,
         financial_cache TEXT,
-        file_sha256 TEXT
+        file_sha256 TEXT,
+        created_by TEXT
     )
     """,
     # -- fixed_costs (local cache) --------------------------------------------
@@ -227,6 +228,9 @@ _TABLE_DEFINITIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_fixed_costs_transaction_id ON fixed_costs(transaction_id)",
     "CREATE INDEX IF NOT EXISTS idx_recurring_services_transaction_id ON recurring_services(transaction_id)",
     "CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)",
+    # -- indexes for audit and identity lookups (LOCAL ONLY) -----------------
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_entity_id ON audit_log(entity_id)",
+    "CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)",
 ]
 
 
@@ -312,8 +316,7 @@ _ALLOWED_TABLES: frozenset[str] = frozenset({
 """Tables that may be referenced in dynamic PRAGMA queries.
 
 This allowlist prevents SQL injection in :func:`_column_exists`.  Every
-table defined in :data:`_TABLE_DEFINITIONS` must be listed here.  See
-TODO.md H-1.
+table defined in :data:`_TABLE_DEFINITIONS` must be listed here.
 """
 
 
@@ -585,6 +588,48 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection, logger: StructuredLogger) -> Non
     )
 
 
+def _migrate_v8_to_v9(conn: sqlite3.Connection, logger: StructuredLogger) -> None:
+    """Add missing indexes on audit_log.entity_id and profiles.email.
+
+    The ``audit_log`` table lacked an index on ``entity_id``, making
+    compliance-reporting queries slow as volume grows.  The ``profiles``
+    table had an email index in Supabase (migration 001) but not in the
+    local SQLite mirror — this corrects the inconsistency.
+
+    Both statements use ``CREATE INDEX IF NOT EXISTS`` for idempotency.
+
+    Does **not** commit — the caller is responsible for transaction
+    management.
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_entity_id "
+        "ON audit_log(entity_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profiles_email "
+        "ON profiles(email)"
+    )
+    logger.info(
+        "Migration v8→v9: created indexes on audit_log(entity_id) "
+        "and profiles(email)."
+    )
+
+
+def _migrate_v9_to_v10(conn: sqlite3.Connection, logger: StructuredLogger) -> None:
+    """Add ``created_by`` column to ``transactions`` for user-based access control.
+
+    Stores the Supabase user UUID of the person who submitted the deal.
+    Nullable so that existing transactions (created before this migration)
+    remain valid.
+
+    Does **not** commit — the caller is responsible for transaction
+    management.
+    """
+    if not _column_exists(conn, "transactions", "created_by"):
+        conn.execute("ALTER TABLE transactions ADD COLUMN created_by TEXT")
+        logger.info("Migration v9→v10: added created_by column to transactions.")
+
+
 # ---------------------------------------------------------------------------
 # Migration registry — maps *target* version to its migration function.
 # ---------------------------------------------------------------------------
@@ -596,6 +641,8 @@ _MIGRATIONS: dict[int, MigrationFunc] = {
     6: _migrate_v5_to_v6,
     7: _migrate_v6_to_v7,
     8: _migrate_v7_to_v8,
+    9: _migrate_v8_to_v9,
+    10: _migrate_v9_to_v10,
 }
 
 
