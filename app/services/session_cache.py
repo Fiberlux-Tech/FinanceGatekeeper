@@ -8,8 +8,8 @@ authentication without requiring a round-trip to Supabase.
 Security model
 --------------
 - The encryption key is derived at runtime from machine-specific
-  characteristics (hostname + OS username) via PBKDF2 with a static salt.
-  The key is **never** persisted to disk.
+  characteristics (hostname + OS username) via PBKDF2-HMAC-SHA256 with
+  a per-machine random salt.  The key is **never** persisted to disk.
 - Payloads are encrypted with AES-256-GCM, providing both confidentiality
   and integrity (authenticated encryption).
 - Cached sessions expire after a configurable number of days (default 7).
@@ -28,52 +28,25 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import hmac
 import json
 import os
+import platform
+import stat
 import socket
+import subprocess
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional
+from pathlib import Path
+from typing import Optional
 
-from pydantic import BaseModel
+from app.models.auth_models import CachedSession
 
 from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 
 from app.database import DatabaseManager
 from app.logger import StructuredLogger
-
-
-# ---------------------------------------------------------------------------
-# Pydantic model for the decrypted session payload
-# ---------------------------------------------------------------------------
-
-class CachedSession(BaseModel):
-    """Represents a decrypted offline session payload.
-
-    Attributes
-    ----------
-    user_id:
-        The Supabase UUID of the authenticated user.
-    email:
-        The user's email address.
-    full_name:
-        The user's full name for display in UI and logs.
-    role:
-        The application role (e.g. ``ADMIN``, ``FINANCE``, ``SALES``).
-    refresh_token:
-        The Supabase refresh token used to obtain new access tokens.
-    cached_at:
-        ISO-8601 UTC timestamp indicating when the session was cached.
-    """
-
-    user_id: str
-    email: str
-    full_name: str
-    role: Literal["SALES", "FINANCE", "ADMIN"]
-    refresh_token: str
-    cached_at: str  # ISO-8601 UTC
-    password_hash: Optional[str] = None  # hex-encoded PBKDF2-HMAC-SHA256
-    password_salt: Optional[str] = None  # hex-encoded random 32-byte salt
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +64,18 @@ class SessionCacheService:
 
     Security model:
     - Encryption key is derived from machine identity (hostname + OS user)
-      via PBKDF2 with a static salt.  The key is never stored.
+      via PBKDF2-HMAC-SHA256 with a per-machine random salt stored in
+      ``~/.fingate_session_salt``.  The key is never stored.  If the salt
+      file cannot be created, session caching is refused entirely.
     - Explicit logout deletes the cached session.
     - Sessions expire after ``max_age_days`` (default 7).
+
+    Architecture Note
+    -----------------
+    This service intentionally accesses SQLite directly rather than
+    through a Repository, because the encrypted session is
+    infrastructure state (auth tokens), not domain data (transactions,
+    users).  This is a documented exception to the Repository pattern.
 
     Parameters
     ----------
@@ -108,10 +90,7 @@ class SessionCacheService:
         returns ``None``.
     """
 
-    # Static salt used for PBKDF2 key derivation.  Changing this value
-    # invalidates all previously cached sessions.
-    _PBKDF2_SALT: bytes = b"FinanceGatekeeper_v1_session_salt"
-    _PBKDF2_ITERATIONS: int = 100_000
+    _PBKDF2_ITERATIONS: int = 600_000
     _KEY_LENGTH: int = 32  # 256 bits
 
     def __init__(
@@ -124,8 +103,8 @@ class SessionCacheService:
         self._logger: StructuredLogger = logger
         self._max_age_days: int = max_age_days
 
-        # Ensure the encrypted_sessions table exists on construction.
-        self._ensure_table()
+        # The encrypted_sessions table is created by schema.py during
+        # initialize_schema() — no duplicate DDL here.
 
     # ------------------------------------------------------------------
     # Public API
@@ -140,7 +119,7 @@ class SessionCacheService:
         refresh_token: str,
         password_hash: Optional[str] = None,
         password_salt: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         """Encrypt and persist a session payload for offline use.
 
         Builds a JSON payload from the supplied user profile fields,
@@ -166,6 +145,14 @@ class SessionCacheService:
         password_salt:
             Hex-encoded random 32-byte salt used to derive the password
             hash.  Must be supplied together with *password_hash*.
+
+        Returns
+        -------
+        bool
+            ``True`` if the session was successfully encrypted and
+            persisted.  ``False`` if encryption or database write
+            failed (the error is logged but not raised, since session
+            caching is non-critical to the login flow).
         """
         payload: dict[str, Optional[str]] = {
             "user_id": user_id,
@@ -188,10 +175,10 @@ class SessionCacheService:
             ciphertext, tag = cipher.encrypt_and_digest(plaintext)
             nonce: bytes = cipher.nonce
         except Exception as exc:
-            self._logger.error(
+            self._logger.warning(
                 "Failed to encrypt session payload: %s", exc,
             )
-            return
+            return False
 
         try:
             self._db.sqlite.execute(
@@ -209,10 +196,12 @@ class SessionCacheService:
             self._logger.info(
                 "Session cached for user %s (%s).", full_name, email,
             )
+            return True
         except Exception as exc:
-            self._logger.error(
+            self._logger.warning(
                 "Failed to write encrypted session to database: %s", exc,
             )
+            return False
 
     def load_cached_session(self) -> Optional[CachedSession]:
         """Load and decrypt the cached offline session.
@@ -373,7 +362,7 @@ class SessionCacheService:
             iterations=self._PBKDF2_ITERATIONS,
         ).hex()
 
-        if computed_hash != cached.password_hash:
+        if not hmac.compare_digest(computed_hash, cached.password_hash):
             self._logger.warning(
                 "Offline password verification failed for %s.", email,
             )
@@ -395,14 +384,15 @@ class SessionCacheService:
         -------
         tuple[str, str]
             A ``(hex_hash, hex_salt)`` pair.  The salt is 32 random
-            bytes; the hash is derived with 100 000 PBKDF2 iterations.
+            bytes; the hash is derived with 600 000 PBKDF2 iterations
+            (OWASP 2023 recommendation).
         """
         salt: bytes = os.urandom(32)
         pw_hash: str = hashlib.pbkdf2_hmac(
             "sha256",
             password.encode("utf-8"),
             salt,
-            iterations=100_000,
+            iterations=SessionCacheService._PBKDF2_ITERATIONS,
         ).hex()
         return pw_hash, salt.hex()
 
@@ -411,48 +401,148 @@ class SessionCacheService:
     # ------------------------------------------------------------------
 
     def _derive_key(self) -> bytes:
-        """Derive a 256-bit AES key from machine identity via PBKDF2.
+        """Derive a 256-bit AES key from machine identity via PBKDF2-HMAC-SHA256.
 
-        The key is deterministic for a given (hostname, OS username) pair
-        and is **never** stored on disk.  If the machine identity changes
-        (e.g. the user logs in under a different OS account), previously
-        cached sessions become undecryptable and are treated as corrupted.
+        Uses a per-machine random salt stored in the user's home
+        directory.  If the salt file cannot be created or read, an
+        ``OSError`` propagates to the caller — session caching is
+        refused rather than degrading to a weak static salt.
+
+        The key is deterministic for a given (hostname, OS username,
+        salt) triple and is **never** stored on disk.  If the machine
+        identity changes (e.g. the user logs in under a different OS
+        account), previously cached sessions become undecryptable and
+        are treated as corrupted.
+
+        Threat Model
+        ------------
+        This is a **local desktop application**.  The encryption key
+        protects cached session tokens against casual disk access — for
+        example, a colleague with brief physical access or an IT
+        administrator browsing user directories.  It is NOT designed to
+        resist:
+
+        - A sophisticated attacker with persistent local access (they
+          can attach a debugger, read process memory, or install a
+          keylogger).
+        - An attacker who has compromised the OS user account (they can
+          derive the same key).
+
+        Key material: ``hostname:username`` provides machine-binding so
+        that a copied database file is useless on a different machine.
+        The real entropy comes from the **per-machine random 32-byte
+        salt** stored in ``~/.fingate_session_salt``, which is unique
+        per installation.
+
+        Future hardening (v2+): Windows DPAPI (``CryptProtectData``)
+        would bind the key to the Windows user's login credentials,
+        providing protection even against file-level access by other OS
+        users.  Deferred because it requires platform-specific ctypes
+        code and the current threat model is appropriate for a v1
+        corporate desktop deployment.
 
         Returns
         -------
         bytes
             A 32-byte (256-bit) key suitable for AES-256-GCM.
+
+        Raises
+        ------
+        OSError
+            If the per-machine salt file cannot be created or read.
         """
         password: str = f"{socket.gethostname()}:{getpass.getuser()}"
+        salt: bytes = self._get_or_create_salt()
         key: bytes = PBKDF2(
             password=password,
-            salt=self._PBKDF2_SALT,
+            salt=salt,
             dkLen=self._KEY_LENGTH,
             count=self._PBKDF2_ITERATIONS,
+            hmac_hash_module=SHA256,
         )
         return key
 
-    def _ensure_table(self) -> None:
-        """Create the ``encrypted_sessions`` table if it does not exist.
+    def _restrict_windows_acl(self, file_path: Path) -> None:
+        """Set NTFS ACLs on *file_path* to restrict access to the current user.
 
-        This is idempotent and safe to call on every service construction.
-        The table uses a single-row design (``id = 1``) to store exactly
-        one active session at a time.
+        Uses the ``icacls`` utility to:
+
+        1. Remove all inherited permissions (``/inheritance:r``).
+        2. Grant full control only to the current OS user
+           (``/grant:r <username>:F``).
+
+        This is the Windows equivalent of ``chmod 0o600``.  If the
+        command fails for any reason (icacls not found, permission
+        denied, timeout), a warning is logged but execution continues
+        because the ACL restriction is defense-in-depth — the salt
+        file remains usable without it.
         """
         try:
-            self._db.sqlite.execute(
-                """
-                CREATE TABLE IF NOT EXISTS encrypted_sessions (
-                    id                INTEGER PRIMARY KEY,
-                    encrypted_payload BLOB NOT NULL,
-                    nonce             BLOB NOT NULL,
-                    tag               BLOB NOT NULL
+            username: str = getpass.getuser()
+            result: subprocess.CompletedProcess[bytes] = subprocess.run(
+                [
+                    "icacls",
+                    str(file_path),
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{username}:F",
+                ],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                stderr_text: str = result.stderr.decode("utf-8", errors="replace").strip()
+                self._logger.warning(
+                    "icacls returned non-zero exit code %d for '%s': %s",
+                    result.returncode,
+                    file_path,
+                    stderr_text,
                 )
-                """
-            )
-            self._db.sqlite.commit()
-            self._logger.debug("Ensured encrypted_sessions table exists.")
+            else:
+                self._logger.info(
+                    "Windows ACLs restricted to current user on '%s'.",
+                    file_path,
+                )
         except Exception as exc:
-            self._logger.error(
-                "Failed to create encrypted_sessions table: %s", exc,
+            self._logger.warning(
+                "Failed to set Windows ACLs on '%s': %s",
+                file_path,
+                exc,
             )
+
+    def _get_or_create_salt(self) -> bytes:
+        """Return a per-machine random salt, creating it on first run.
+
+        The salt is stored at ``~/.fingate_session_salt``.  If the file
+        cannot be read or created (e.g. permissions), an ``OSError`` is
+        raised — callers must handle this to refuse session caching
+        rather than falling back to a weak static salt.
+
+        Raises
+        ------
+        OSError
+            If the salt file cannot be read or written.
+        """
+        salt_path: Path = Path.home() / ".fingate_session_salt"
+        if salt_path.exists():
+            data: bytes = salt_path.read_bytes()
+            if len(data) == 32:
+                return data
+            # Corrupt or wrong-length — regenerate
+            self._logger.warning(
+                "Salt file has unexpected length (%d); regenerating.",
+                len(data),
+            )
+        salt: bytes = os.urandom(32)
+        salt_path.write_bytes(salt)
+
+        # Restrict file permissions to owner-only.
+        if platform.system() == "Windows":
+            self._restrict_windows_acl(salt_path)
+        else:
+            salt_path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+
+        self._logger.info("Per-machine session salt created at %s.", salt_path)
+        return salt
+

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import traceback
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional
 
-from app.auth import CurrentUser
+from app.models.user import User
 from app.logger import StructuredLogger
 from app.models.enums import ApprovalStatus, UserRole
 from app.models.fixed_cost import FixedCost
@@ -30,7 +30,10 @@ from app.models.service_models import ServiceResult
 from app.models.transaction import Transaction
 from app.repositories.fixed_cost_repository import FixedCostRepository
 from app.repositories.recurring_service_repository import RecurringServiceRepository
-from app.repositories.transaction_repository import TransactionRepository
+from app.repositories.transaction_repository import (
+    PaginatedTransactions,
+    TransactionRepository,
+)
 from app.services.base_service import BaseService
 from app.services.email_service import EmailService
 from app.services.financial_engine import (
@@ -44,29 +47,18 @@ from app.utils.general import convert_to_json_safe
 from app.utils.string_helpers import normalize_keys
 
 
-def _generate_unique_id(customer_name: str, business_unit: str) -> str:
+def _generate_unique_id() -> str:
     """
     Generates a unique transaction ID using microseconds for maximum granularity.
 
     Format: FLX{YY}-{MMDDHHMMSSFFFFF}
 
-    Args:
-        customer_name: The customer name (currently unused but reserved).
-        business_unit: The business unit code (currently unused but reserved).
-
     Returns:
         A unique transaction ID string.
     """
     now = datetime.now()
-
-    # 1. Extract the Date/Time Components
     year_part: str = now.strftime("%y")
     datetime_micro_part: str = now.strftime("%m%d%H%M%S%f")
-
-    # 2. Extract the Unit Part (reserved for future use)
-    _unit_part: str = (business_unit or "XXX")[:3].upper()
-
-    # 3. Construct the new ID
     return f"FLX{year_part}-{datetime_micro_part}"
 
 
@@ -221,7 +213,9 @@ class TransactionCrudService(BaseService):
             recalc_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
 
             # Calculate financial metrics
-            financial_metrics: dict[str, object] = calculate_financial_metrics(recalc_data)
+            financial_metrics: dict[str, object] = calculate_financial_metrics(
+                recalc_data,
+            ).model_dump()
             clean_metrics: dict[str, object] = convert_to_json_safe(financial_metrics)
 
             # 6. Update transaction with fresh calculations
@@ -259,7 +253,7 @@ class TransactionCrudService(BaseService):
     def save_transaction(
         self,
         data: dict[str, object],
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Saves a new transaction and its related costs to the database.
@@ -301,7 +295,9 @@ class TransactionCrudService(BaseService):
                 }
 
                 # Recalculate all financial metrics using backend logic
-                recalculated_metrics: dict[str, object] = calculate_financial_metrics(full_data_package)
+                recalculated_metrics: dict[str, object] = calculate_financial_metrics(
+                    full_data_package,
+                ).model_dump()
                 clean_metrics = convert_to_json_safe(recalculated_metrics)
 
                 # Override frontend values with backend calculations
@@ -317,10 +313,7 @@ class TransactionCrudService(BaseService):
                     "Falling back to frontend-provided values for transaction"
                 )
 
-            unique_id: str = _generate_unique_id(
-                tx_data.get("client_name", ""),
-                tx_data.get("unidad_negocio", ""),
-            )
+            unique_id: str = _generate_unique_id()
 
             # --- Extract GIGALAN Data ---
             gigalan_region: Optional[str] = tx_data.get("gigalan_region")
@@ -364,6 +357,8 @@ class TransactionCrudService(BaseService):
                 gigalan_region=gigalan_region,
                 gigalan_sale_type=gigalan_sale_type,
                 gigalan_old_mrc=gigalan_old_mrc,
+                # Chain of Custody (CLAUDE.md §5)
+                file_sha256=tx_data.get("file_sha256"),
                 # Master variables snapshot: frozen at creation
                 master_variables_snapshot=tx_data.get("master_variables_snapshot"),
                 approval_status=ApprovalStatus.PENDING,
@@ -374,7 +369,7 @@ class TransactionCrudService(BaseService):
             # Persist the transaction via repository
             created_tx: Transaction = self._tx_repo.create(new_transaction)
 
-            # Build and persist fixed costs
+            # Build fixed cost models
             fixed_cost_models: list[FixedCost] = []
             for cost_item in data.get("fixed_costs", []):
                 new_cost = FixedCost(
@@ -392,10 +387,7 @@ class TransactionCrudService(BaseService):
                 )
                 fixed_cost_models.append(new_cost)
 
-            if fixed_cost_models:
-                self._fc_repo.create_batch(created_tx.id, fixed_cost_models)
-
-            # Build and persist recurring services (with PEN conversion)
+            # Build recurring service models (with PEN conversion)
             save_converter = CurrencyConverter(tx_data.get("tipo_cambio", 1))
             recurring_service_models: list[RecurringService] = []
 
@@ -434,8 +426,48 @@ class TransactionCrudService(BaseService):
                 )
                 recurring_service_models.append(new_service)
 
-            if recurring_service_models:
-                self._rs_repo.create_batch(created_tx.id, recurring_service_models)
+            # --- Atomic detail insertion (CLAUDE.md Section 6) ---
+            # Header + detail rows must be inserted atomically.  If detail
+            # creation fails, delete the orphaned header via compensating rollback.
+            try:
+                if fixed_cost_models:
+                    self._fc_repo.create_batch(created_tx.id, fixed_cost_models)
+                if recurring_service_models:
+                    self._rs_repo.create_batch(created_tx.id, recurring_service_models)
+            except Exception as detail_exc:
+                self._logger.error(
+                    "Detail row creation failed for transaction %s; "
+                    "rolling back header to prevent orphaned data: %s",
+                    created_tx.id,
+                    detail_exc,
+                )
+                try:
+                    self._tx_repo.supabase.table("transactions").delete().eq(
+                        "id", created_tx.id
+                    ).execute()
+                except Exception as rollback_exc:
+                    self._logger.error(
+                        "Supabase header rollback also failed for %s: %s",
+                        created_tx.id,
+                        rollback_exc,
+                    )
+                # Best-effort cleanup of any partially-created detail rows
+                try:
+                    self._fc_repo.supabase.table("fixed_costs").delete().eq(
+                        "transaction_id", created_tx.id
+                    ).execute()
+                    self._rs_repo.supabase.table("recurring_services").delete().eq(
+                        "transaction_id", created_tx.id
+                    ).execute()
+                except Exception as cleanup_error:
+                    self._logger.error(
+                        "FK CASCADE cleanup failed for transaction %s: %s. "
+                        "Database may contain orphaned detail rows.",
+                        created_tx.id,
+                        cleanup_error,
+                        exc_info=True,
+                    )
+                raise detail_exc
 
             new_id: str = created_tx.id
             self._logger.info(
@@ -444,7 +476,7 @@ class TransactionCrudService(BaseService):
                 current_user.full_name,
             )
 
-            # Audit trail
+            # Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="CREATE",
@@ -456,6 +488,7 @@ class TransactionCrudService(BaseService):
                     "unidad_negocio": tx_data.get("unidad_negocio"),
                     "salesman": current_user.full_name,
                 },
+                conn=self._tx_repo.sqlite,
             )
 
             # Send submission email (non-blocking: log error but do not fail)
@@ -497,7 +530,7 @@ class TransactionCrudService(BaseService):
 
     def get_transactions(
         self,
-        current_user: CurrentUser,
+        current_user: User,
         page: int = 1,
         per_page: int = 30,
         search: Optional[str] = None,
@@ -527,7 +560,7 @@ class TransactionCrudService(BaseService):
             if current_user.role == UserRole.SALES:
                 salesman_filter = current_user.full_name
 
-            result: dict[str, object] = self._tx_repo.get_paginated(
+            result: PaginatedTransactions = self._tx_repo.get_paginated(
                 page=page,
                 per_page=per_page,
                 salesman_filter=salesman_filter,
@@ -569,7 +602,7 @@ class TransactionCrudService(BaseService):
     def get_transaction_detail(
         self,
         transaction_id: str,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Retrieves a single transaction with full details by its string ID.
@@ -639,7 +672,9 @@ class TransactionCrudService(BaseService):
                 tx_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
 
                 # 2. Calculate and cache the metrics
-                financial_metrics: dict[str, object] = calculate_financial_metrics(tx_data)
+                financial_metrics: dict[str, object] = calculate_financial_metrics(
+                    tx_data,
+                ).model_dump()
                 clean_financial_metrics = convert_to_json_safe(financial_metrics)
 
                 # 3. Self-heal: Update the cache for future requests
@@ -712,7 +747,7 @@ class TransactionCrudService(BaseService):
         self,
         transaction_id: str,
         data_payload: dict[str, object],
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Updates a PENDING transaction's content without changing its status or ID.
@@ -764,7 +799,7 @@ class TransactionCrudService(BaseService):
             # 5. Persist the changes via repository
             self._tx_repo.update(transaction)
 
-            # 6. Audit trail
+            # 6. Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="UPDATE_CONTENT",
@@ -772,6 +807,7 @@ class TransactionCrudService(BaseService):
                 entity_id=transaction_id,
                 user_id=current_user.id,
                 details={"updated_by": current_user.full_name},
+                conn=self._tx_repo.sqlite,
             )
 
             # 7. Return the updated transaction details
@@ -796,7 +832,7 @@ class TransactionCrudService(BaseService):
 
     def get_transaction_template(
         self,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Returns an empty transaction template pre-filled with current MasterVariables.

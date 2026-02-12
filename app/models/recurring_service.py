@@ -16,7 +16,7 @@ class RecurringService(BaseModel):
     """Represents a recurring service line item in a transaction."""
 
     id: Optional[int] = None
-    transaction_id: Optional[str] = None
+    transaction_id: str
     tipo_servicio: Optional[str] = None
     nota: Optional[str] = None
     ubicacion: Optional[str] = None

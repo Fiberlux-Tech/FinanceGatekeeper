@@ -51,14 +51,16 @@ def log_audit_event(
     entity_id: str,
     user_id: str,
     details: Optional[dict[str, DetailValue]] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> None:
-    """Log a structured JSON audit event.
+    """Log a structured JSON audit event, with optional SQLite persistence.
 
-    The public signature is intentionally unchanged so that existing
-    callers (services, commands) continue to work without modification.
-    Internally the raw arguments are funnelled through :class:`AuditEvent`
-    for Pydantic schema validation before the resulting dict is serialised
-    and emitted via the supplied *logger*.
+    Always emits a structured JSON log line via *logger*.  When *conn* is
+    provided, also writes the event to the ``audit_log`` SQLite table for
+    queryable persistence (dual logging).
+
+    The *conn* parameter is optional for backward compatibility — existing
+    callers that omit it continue to work as before (log-only).
 
     Args:
         logger: The logger instance to write to.
@@ -69,6 +71,9 @@ def log_audit_event(
         entity_id: Primary key of the affected entity.
         user_id: ID of the user who performed the action.
         details: Optional additional context (e.g. old/new values).
+        conn: Optional SQLite connection.  When provided, the event is
+            also persisted to the ``audit_log`` table via
+            :func:`persist_audit_event`.
     """
     event = AuditEvent(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -79,6 +84,24 @@ def log_audit_event(
         details=details or {},
     )
     logger.info("AUDIT: %s", json.dumps(event.model_dump(), default=str))
+
+    # Dual logging: persist to SQLite when a connection is available.
+    # Errors are logged but never propagated — audit persistence must
+    # not break the calling operation.
+    if conn is not None:
+        try:
+            persist_audit_event(
+                conn=conn,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                user_id=user_id,
+                details=details,
+            )
+        except Exception as db_err:
+            logger.warning(
+                "Failed to persist audit event to SQLite: %s", db_err
+            )
 
 
 def persist_audit_event(

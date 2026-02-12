@@ -14,6 +14,25 @@ Implements the dual-database pattern for the FinanceGatekeeper OS:
 Data access is performed through the Repository pattern.  This module only
 manages the raw database *connections*; it contains no query logic.
 
+Security Note — Encryption at Rest (L-50)
+------------------------------------------
+The local SQLite database is **not** encrypted at rest.  Transaction data,
+user profiles, and audit logs stored in ``gatekeeper_local.db`` are readable
+by any process or user with file-system access to the database file.
+
+Current mitigations:
+- Sensitive auth tokens are AES-256-GCM encrypted in the
+  ``encrypted_sessions`` table (see ``SessionCacheService``).
+- Rate-limit state is HMAC-signed to detect file-level tampering.
+- The application targets corporate Windows desktops with NTFS ACLs
+  restricting per-user home directories.
+
+Planned hardening (v2+):
+- Migrate to ``sqlcipher`` (SQLCipher) for full database encryption,
+  keyed via Windows DPAPI (``CryptProtectData``).  This requires a
+  native C extension and installer changes — deferred to avoid
+  deployment complexity in v1.
+
 Usage (dependency injection at app startup)::
 
     from app.database import DatabaseManager
@@ -31,8 +50,10 @@ Usage (dependency injection at app startup)::
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
 from supabase import create_client, Client as SupabaseClient
 
@@ -74,6 +95,8 @@ class DatabaseManager:
         logger: StructuredLogger,
     ) -> None:
         self._logger: StructuredLogger = logger
+        self._write_lock: threading.RLock = threading.RLock()
+        self._in_batch: bool = False
 
         # --- Supabase (optional — offline-first) ---
         self._supabase: Optional[SupabaseClient] = None
@@ -81,10 +104,17 @@ class DatabaseManager:
             try:
                 self._supabase = create_client(supabase_url, supabase_key)
                 self._logger.info("Supabase client initialized.")
-            except Exception as exc:
+            except (ValueError, TypeError) as exc:
                 self._logger.warning(
-                    "Supabase initialization failed: %s. Running in offline mode.",
+                    "Supabase credential format error: %s. Running in offline mode.",
                     exc,
+                )
+            except Exception as exc:
+                self._logger.error(
+                    "Unexpected Supabase initialization failure: %s. "
+                    "Running in offline mode.",
+                    exc,
+                    exc_info=True,
                 )
         else:
             self._logger.warning(
@@ -126,6 +156,69 @@ class DatabaseManager:
         """Return the initialised SQLite connection."""
         return self._sqlite_conn
 
+    @property
+    def write_lock(self) -> threading.RLock:
+        """Return the write lock for thread-safe SQLite operations.
+
+        All code that performs SQLite writes (INSERT, UPDATE, DELETE,
+        or any operation followed by ``commit()``) should acquire this
+        lock first::
+
+            with db.write_lock:
+                db.sqlite.execute("INSERT ...")
+                db.sqlite.commit()
+        """
+        return self._write_lock
+
+    @property
+    def in_batch(self) -> bool:
+        """``True`` when a :meth:`batch_write` context is active.
+
+        Repository code checks this flag before issuing ``commit()``
+        so that bulk operations can defer the commit to a single call
+        at the end of the batch.
+        """
+        return self._in_batch
+
+    @contextmanager
+    def batch_write(self) -> Generator[None, None, None]:
+        """Context manager that defers SQLite commits for bulk operations.
+
+        While the context is active, :pyattr:`in_batch` is ``True`` and
+        repository ``_commit()`` calls become no-ops.  On normal exit
+        a single ``commit()`` is issued.  On exception the transaction
+        is rolled back and the error re-raised.
+
+        Backwards-compatible: without this context manager, individual
+        commits still work exactly as before.
+
+        Example::
+
+            with db_manager.batch_write():
+                for item in items:
+                    repo.create(item)  # no commit per item
+            # single commit happens here
+        """
+        if self._in_batch:
+            # Re-entrant: already in a batch, just yield without
+            # double-committing on exit.
+            yield
+            return
+
+        self._in_batch = True
+        try:
+            yield
+            self._sqlite_conn.commit()
+            self._logger.debug("Batch write committed.")
+        except Exception:
+            self._sqlite_conn.rollback()
+            self._logger.error(
+                "Batch write rolled back due to exception.", exc_info=True,
+            )
+            raise
+        finally:
+            self._in_batch = False
+
     # ------------------------------------------------------------------
     # Lifecycle helpers
     # ------------------------------------------------------------------
@@ -137,26 +230,32 @@ class DatabaseManager:
         fails for any reason, making it safe to call at any point
         during the application lifecycle.
         """
-        try:
-            row = self._sqlite_conn.execute(
-                "SELECT COUNT(*) AS cnt FROM sync_queue WHERE status = 'pending'",
-            ).fetchone()
-            return int(row["cnt"]) if row else 0
-        except Exception:
-            return 0
+        with self._write_lock:
+            try:
+                row = self._sqlite_conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM sync_queue WHERE status = 'pending'",
+                ).fetchone()
+                return int(row["cnt"]) if row else 0
+            except Exception:
+                self._logger.debug(
+                    "get_pending_sync_count query failed; returning 0.",
+                    exc_info=True,
+                )
+                return 0
 
     def close(self) -> None:
         """Close the local SQLite connection.
 
         Safe to call multiple times; subsequent calls are no-ops.
         """
-        if self._sqlite_conn is not None:
-            try:
-                self._sqlite_conn.close()
-                self._logger.info("SQLite connection closed.")
-            except sqlite3.ProgrammingError:
-                # Connection was already closed — nothing to do.
-                pass
+        with self._write_lock:
+            if self._sqlite_conn is not None:
+                try:
+                    self._sqlite_conn.close()
+                    self._logger.info("SQLite connection closed.")
+                except sqlite3.ProgrammingError:
+                    # Connection was already closed — nothing to do.
+                    pass
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -190,6 +289,7 @@ class DatabaseManager:
             conn.row_factory = sqlite3.Row
             # Enable WAL mode for better concurrent read performance.
             conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA foreign_keys = ON;")
             self._logger.info("SQLite database opened at %s", path)
             return conn
         except PermissionError as exc:

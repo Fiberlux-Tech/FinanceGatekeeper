@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.auth import CurrentUser
+from app.models.user import User
 from app.config import AppConfig
 from app.logger import StructuredLogger
 from app.models.enums import UserRole
@@ -87,7 +87,7 @@ class VariableService(BaseService):
         variable_name: str,
         value: str,
         comment: str,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Insert a new record for a master variable, enforcing RBAC.
@@ -135,8 +135,21 @@ class VariableService(BaseService):
             )
 
         # 3. RBAC enforcement
-        required_role: str = variable_config["write_role"]
         variable_category: str = variable_config["category"]
+        try:
+            required_role: UserRole = UserRole(variable_config["write_role"])
+        except ValueError:
+            self._logger.error(
+                "Invalid write_role '%s' in MASTER_VARIABLE_ROLES config for '%s'. "
+                "RBAC check cannot proceed.",
+                variable_config["write_role"],
+                variable_name,
+            )
+            return ServiceResult(
+                success=False,
+                error="Server configuration error. Contact your administrator.",
+                status_code=500,
+            )
 
         if (
             current_user.role != UserRole.ADMIN
@@ -145,7 +158,7 @@ class VariableService(BaseService):
             return ServiceResult(
                 success=False,
                 error=(
-                    f"Permission denied. Only {required_role} can update "
+                    f"Permission denied. Only {required_role.value} can update "
                     f"the {variable_category} category."
                 ),
                 status_code=403,
@@ -162,7 +175,7 @@ class VariableService(BaseService):
             )
             created: MasterVariable = self._repo.create(new_variable)
 
-            # 5. Audit trail (structured JSON log)
+            # 5. Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="UPDATE_VARIABLE",
@@ -174,6 +187,7 @@ class VariableService(BaseService):
                     "category": variable_category,
                     "comment": comment,
                 },
+                conn=self._repo.sqlite,
             )
 
             return ServiceResult(

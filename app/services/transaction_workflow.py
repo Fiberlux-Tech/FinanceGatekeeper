@@ -13,11 +13,10 @@ Functions ported:
 
 from __future__ import annotations
 
-import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.auth import CurrentUser
+from app.models.user import User
 from app.logger import StructuredLogger
 from app.models.enums import ApprovalStatus, UserRole
 from app.models.service_models import ServiceResult
@@ -85,7 +84,9 @@ class TransactionWorkflowService(BaseService):
         tx_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
 
         # Recalculate financial metrics
-        financial_metrics: dict[str, object] = calculate_financial_metrics(tx_data)
+        financial_metrics: dict[str, object] = calculate_financial_metrics(
+            tx_data,
+        ).model_dump()
         clean_metrics: dict[str, object] = convert_to_json_safe(financial_metrics)
 
         # Update transaction with fresh calculations
@@ -120,7 +121,7 @@ class TransactionWorkflowService(BaseService):
     def approve_transaction(
         self,
         transaction_id: str,
-        current_user: CurrentUser,
+        current_user: User,
         data_payload: Optional[dict[str, object]] = None,
     ) -> ServiceResult:
         """
@@ -191,7 +192,11 @@ class TransactionWorkflowService(BaseService):
                     str(calc_error),
                     exc_info=True,
                 )
-                # Continue with approval even if recalculation fails
+                return ServiceResult(
+                    success=False,
+                    error="Cannot approve: financial metric recalculation failed. Please retry or contact support.",
+                    status_code=500,
+                )
 
             # Update status
             transaction.approval_status = ApprovalStatus.APPROVED
@@ -200,7 +205,7 @@ class TransactionWorkflowService(BaseService):
             # Persist via repository
             self._tx_repo.update(transaction)
 
-            # Audit trail
+            # Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="APPROVE",
@@ -211,6 +216,7 @@ class TransactionWorkflowService(BaseService):
                     "approved_by": current_user.full_name,
                     "client_name": transaction.client_name,
                 },
+                conn=self._tx_repo.sqlite,
             )
 
             # Send approval email (non-blocking)
@@ -246,7 +252,7 @@ class TransactionWorkflowService(BaseService):
     def reject_transaction(
         self,
         transaction_id: str,
-        current_user: CurrentUser,
+        current_user: User,
         rejection_note: Optional[str] = None,
         data_payload: Optional[dict[str, object]] = None,
     ) -> ServiceResult:
@@ -319,7 +325,11 @@ class TransactionWorkflowService(BaseService):
                     str(calc_error),
                     exc_info=True,
                 )
-                # Continue with rejection even if recalculation fails
+                return ServiceResult(
+                    success=False,
+                    error="Cannot reject: financial metric recalculation failed. Please retry or contact support.",
+                    status_code=500,
+                )
 
             # Update status
             transaction.approval_status = ApprovalStatus.REJECTED
@@ -332,7 +342,7 @@ class TransactionWorkflowService(BaseService):
             # Persist via repository
             self._tx_repo.update(transaction)
 
-            # Audit trail
+            # Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="REJECT",
@@ -344,6 +354,7 @@ class TransactionWorkflowService(BaseService):
                     "client_name": transaction.client_name,
                     "rejection_note": rejection_note or "",
                 },
+                conn=self._tx_repo.sqlite,
             )
 
             # Send rejection email (non-blocking)
@@ -379,7 +390,7 @@ class TransactionWorkflowService(BaseService):
     def recalculate_commission_and_metrics(
         self,
         transaction_id: str,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Applies the official commission, recalculates all financial metrics,
@@ -435,7 +446,7 @@ class TransactionWorkflowService(BaseService):
             # 3. Persist changes via repository
             self._tx_repo.update(transaction)
 
-            # 4. Audit trail
+            # 4. Audit trail (dual: log + SQLite)
             log_audit_event(
                 logger=self._logger,
                 action="RECALCULATE",
@@ -443,6 +454,7 @@ class TransactionWorkflowService(BaseService):
                 entity_id=transaction_id,
                 user_id=current_user.id,
                 details={"recalculated_by": current_user.full_name},
+                conn=self._tx_repo.sqlite,
             )
 
             # 5. Return the full, updated transaction details

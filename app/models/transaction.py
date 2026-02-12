@@ -25,12 +25,6 @@ class MasterVariablesSnapshot(BaseModel):
     tasa_carta_fianza: float = Field(ge=0)
     captured_at: str  # ISO format datetime string
 
-    @field_validator("*", mode="before")
-    @classmethod
-    def _coerce_from_legacy_dict(cls, v: object) -> object:
-        """Pass through — actual dict normalization happens in Transaction."""
-        return v
-
     model_config = {"from_attributes": True}
 
 
@@ -74,9 +68,9 @@ class Transaction(BaseModel):
     id: str
     unidad_negocio: str = ""
     client_name: str = ""
-    company_id: Optional[float] = None
+    company_id: Optional[int] = None
     salesman: str = ""
-    order_id: Optional[float] = None
+    order_id: Optional[int] = None
     tipo_cambio: Optional[float] = Field(default=None, gt=0)
 
     # MRC fields (Monthly Recurring Charge)
@@ -115,6 +109,9 @@ class Transaction(BaseModel):
     gigalan_region: Optional[str] = None
     gigalan_sale_type: Optional[str] = None
     gigalan_old_mrc: Optional[float] = None
+
+    # Chain of Custody (CLAUDE.md §5)
+    file_sha256: Optional[str] = None
 
     # Metadata
     master_variables_snapshot: Optional[MasterVariablesSnapshot] = None

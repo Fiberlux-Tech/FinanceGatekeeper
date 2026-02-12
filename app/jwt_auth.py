@@ -32,12 +32,18 @@ class AuthenticationError(RuntimeError):
     """Raised when a guarded function is called without an active session."""
 
 
+class TokenExpiredError(AuthenticationError):
+    """Raised when the session token has expired."""
+
+
 def require_auth(session: SessionManager) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Return a decorator that enforces authentication via *session*.
 
-    The returned decorator checks ``session.is_authenticated`` before
-    every call to the wrapped function.  If no user is logged in, an
-    :class:`AuthenticationError` is raised.
+    The returned decorator checks ``session.is_authenticated`` and
+    ``session.is_token_expired`` before every call to the wrapped
+    function.  If no user is logged in, an :class:`AuthenticationError`
+    is raised.  If the token has expired, a :class:`TokenExpiredError`
+    is raised.
 
     Args:
         session: The injectable ``SessionManager`` that holds the
@@ -54,6 +60,10 @@ def require_auth(session: SessionManager) -> Callable[[Callable[P, R]], Callable
                 raise AuthenticationError(
                     "Authentication required. Please log in before "
                     "performing this action."
+                )
+            if session.is_token_expired:
+                raise TokenExpiredError(
+                    "Session token has expired. Please sign in again."
                 )
             return func(*args, **kwargs)
 

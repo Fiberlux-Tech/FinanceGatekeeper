@@ -9,9 +9,10 @@ a ``COUNT(*)`` query on ``sync_queue``.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import customtkinter as ctk
 
-import app as _app_pkg
 from app.database import DatabaseManager
 from app.logger import StructuredLogger
 from app.ui.theme import (
@@ -35,7 +36,7 @@ class StatusBar(ctk.CTkFrame):
     - A coloured dot indicating connectivity (green = online,
       red = offline, yellow = pending sync items).
     - The number of pending sync-queue items.
-    - The application version from ``app.__version__``.
+    - The application version string.
 
     The bar refreshes automatically every 30 seconds via
     ``self.after()``.
@@ -48,6 +49,9 @@ class StatusBar(ctk.CTkFrame):
         Used to check ``is_online`` and query the sync queue.
     logger:
         Structured logger instance.
+    version:
+        Application version string (e.g. ``"1.0.0"``), injected by
+        the parent ``AppShell``.
     """
 
     def __init__(
@@ -55,6 +59,7 @@ class StatusBar(ctk.CTkFrame):
         parent: ctk.CTkFrame,
         db: DatabaseManager,
         logger: StructuredLogger,
+        version: str,
     ) -> None:
         super().__init__(
             parent,
@@ -65,6 +70,8 @@ class StatusBar(ctk.CTkFrame):
 
         self._db = db
         self._logger = logger
+        self._version = version
+        self._refresh_job: Optional[str] = None
 
         # --- Widgets ---
         self._status_dot = ctk.CTkLabel(
@@ -87,7 +94,7 @@ class StatusBar(ctk.CTkFrame):
 
         self._version_label = ctk.CTkLabel(
             self,
-            text=f"v{_app_pkg.__version__}",
+            text=f"v{self._version}",
             font=FONT_SMALL,
             text_color=TEXT_LIGHT,
             anchor="e",
@@ -120,7 +127,14 @@ class StatusBar(ctk.CTkFrame):
         self._status_label.configure(text=text)
 
         # Schedule next refresh
-        self.after(_REFRESH_INTERVAL_MS, self.update_status)
+        self._refresh_job = self.after(_REFRESH_INTERVAL_MS, self.update_status)
+
+    def destroy(self) -> None:
+        """Cancel the periodic refresh before destroying the widget."""
+        if self._refresh_job is not None:
+            self.after_cancel(self._refresh_job)
+            self._refresh_job = None
+        super().destroy()
 
     # ------------------------------------------------------------------
     # Private

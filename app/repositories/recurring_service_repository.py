@@ -6,13 +6,13 @@ Handles data access for RecurringService line items belonging to transactions.
 
 from __future__ import annotations
 
-from app.logger import StructuredLogger
+import sqlite3
 from typing import Optional
 
+from app.logger import StructuredLogger
 from app.database import DatabaseManager
 from app.models.recurring_service import RecurringService
 from app.repositories.base_repository import BaseRepository
-from app.utils.string_helpers import normalize_keys, denormalize_keys
 
 
 class RecurringServiceRepository(BaseRepository):
@@ -22,32 +22,45 @@ class RecurringServiceRepository(BaseRepository):
 
     def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
-        self._ensure_sqlite_table()
 
-    def _ensure_sqlite_table(self) -> None:
-        """Create the local SQLite cache table if it doesn't exist."""
-        self.sqlite.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                transaction_id TEXT NOT NULL,
-                tipo_servicio TEXT,
-                nota TEXT,
-                ubicacion TEXT,
-                quantity REAL,
-                price_original REAL,
-                price_currency TEXT DEFAULT 'PEN',
-                price_pen REAL,
-                cost_unit_1_original REAL,
-                cost_unit_2_original REAL,
-                cost_unit_currency TEXT DEFAULT 'USD',
-                cost_unit_1_pen REAL,
-                cost_unit_2_pen REAL,
-                proveedor TEXT
+    def get_by_id(self, item_id: int) -> Optional[RecurringService]:
+        """Fetch a single recurring service by its primary key.
+
+        Tries Supabase first, falls back to SQLite.
+
+        Args:
+            item_id: The integer primary key of the recurring service row.
+
+        Returns:
+            The RecurringService if found, or None.
+        """
+        try:
+            response = (
+                self.supabase.table(self.TABLE)
+                .select("*")
+                .eq("id", item_id)
+                .maybe_single()
+                .execute()
             )
-            """
-        )
-        self.sqlite.commit()
+            if response.data:
+                return RecurringService(**response.data)
+        except Exception as exc:
+            self._logger.warning(
+                "Supabase unavailable for recurring service lookup by id: %s", exc
+            )
+
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row:
+                return RecurringService(**dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_id (recurring_services): %s",
+                sqlite_exc,
+            )
+        return None
 
     def get_by_transaction(self, transaction_id: str) -> list[RecurringService]:
         """Fetch all recurring services for a transaction."""
@@ -59,29 +72,47 @@ class RecurringServiceRepository(BaseRepository):
                 .execute()
             )
             return [
-                RecurringService(**normalize_keys(row)) for row in response.data
+                RecurringService(**row) for row in response.data
             ]
         except Exception as exc:
             self._logger.warning(
                 "Supabase unavailable for recurring services: %s", exc
             )
 
-        rows = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
-            (transaction_id,),
-        ).fetchall()
-        return [RecurringService(**dict(row)) for row in rows]
+        try:
+            rows = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
+                (transaction_id,),
+            ).fetchall()
+            return [RecurringService(**dict(row)) for row in rows]
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_transaction (recurring_services): %s",
+                sqlite_exc,
+            )
+            return []
 
     def replace_for_transaction(
         self, transaction_id: str, services: list[RecurringService]
     ) -> list[RecurringService]:
-        """
-        Replace all recurring services for a transaction (atomic delete + insert).
-        Used when recalculating or updating transaction content.
+        """Replace all recurring services for a transaction.
+
+        Uses a compensating-transaction pattern (C-6 fix): if the INSERT
+        fails after the DELETE, the old rows are re-inserted so that
+        data is never permanently lost.
         """
         created: list[RecurringService] = []
 
         try:
+            # Snapshot existing rows for compensating rollback
+            old_response = (
+                self.supabase.table(self.TABLE)
+                .select("*")
+                .eq("transaction_id", transaction_id)
+                .execute()
+            )
+            old_rows: list[dict[str, object]] = old_response.data or []
+
             # Delete existing
             self.supabase.table(self.TABLE).delete().eq(
                 "transaction_id", transaction_id
@@ -93,16 +124,32 @@ class RecurringServiceRepository(BaseRepository):
                 for svc in services:
                     data = svc.model_dump(exclude={"id"})
                     data["transaction_id"] = transaction_id
-                    rows_to_insert.append(denormalize_keys(data))
-                response = (
-                    self.supabase.table(self.TABLE)
-                    .insert(rows_to_insert)
-                    .execute()
-                )
-                created = [
-                    RecurringService(**normalize_keys(row))
-                    for row in response.data
-                ]
+                    rows_to_insert.append(data)
+                try:
+                    response = (
+                        self.supabase.table(self.TABLE)
+                        .insert(rows_to_insert)
+                        .execute()
+                    )
+                    created = [
+                        RecurringService(**row)
+                        for row in response.data
+                    ]
+                except Exception as insert_exc:
+                    # Compensating rollback: re-insert old rows
+                    self._logger.error(
+                        "INSERT failed after DELETE for recurring_services "
+                        "(transaction %s); rolling back: %s",
+                        transaction_id,
+                        insert_exc,
+                    )
+                    if old_rows:
+                        restore_rows = [
+                            {k: v for k, v in row.items() if k != "id"}
+                            for row in old_rows
+                        ]
+                        self.supabase.table(self.TABLE).insert(restore_rows).execute()
+                    raise
 
             # Sync to SQLite
             self._replace_in_sqlite(transaction_id, created or services)
@@ -129,7 +176,7 @@ class RecurringServiceRepository(BaseRepository):
         for svc in services:
             data = svc.model_dump(exclude={"id"})
             data["transaction_id"] = transaction_id
-            rows_to_insert.append(denormalize_keys(data))
+            rows_to_insert.append(data)
 
         try:
             response = (
@@ -138,7 +185,7 @@ class RecurringServiceRepository(BaseRepository):
                 .execute()
             )
             created = [
-                RecurringService(**normalize_keys(row)) for row in response.data
+                RecurringService(**row) for row in response.data
             ]
             self._replace_in_sqlite(transaction_id, created)
             return created
@@ -188,5 +235,5 @@ class RecurringServiceRepository(BaseRepository):
                     svc.proveedor,
                 ),
             )
-        self.sqlite.commit()
+        self._commit()
 

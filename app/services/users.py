@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.auth import CurrentUser
 from app.database import DatabaseManager
 from app.logger import StructuredLogger
+from app.models.auth_models import ValidationResult
 from app.models.enums import UserRole
 from app.models.service_models import ServiceResult
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
+from app.services.auth_service import AuthService
 from app.services.base_service import BaseService
 from app.utils.audit import log_audit_event
 
@@ -71,7 +72,7 @@ class UserService(BaseService):
         self,
         user_id: str,
         new_role: str,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Update a user's role in the local database AND Supabase Auth metadata.
@@ -133,13 +134,19 @@ class UserService(BaseService):
             )
 
         # --- 4. CRITICAL: Sync Supabase Auth user_metadata ---
-        self._sync_supabase_metadata(
+        metadata_synced: bool = self._sync_supabase_metadata(
             user_id=user_id,
             full_name=updated_user.full_name,
             role=validated_role,
         )
+        if not metadata_synced:
+            self._logger.warning(
+                "Role updated locally for %s but Supabase metadata sync failed. "
+                "JIT provisioning may revert this change on next login.",
+                user_id,
+            )
 
-        # --- 5. Audit trail ---
+        # --- 5. Audit trail (dual: log + SQLite) ---
         log_audit_event(
             logger=self._logger,
             action="UPDATE_ROLE",
@@ -151,6 +158,7 @@ class UserService(BaseService):
                 "new_role": str(validated_role),
                 "performed_by": current_user.full_name,
             },
+            conn=self._repo.sqlite,
         )
 
         return ServiceResult(
@@ -164,7 +172,7 @@ class UserService(BaseService):
         self,
         user_id: str,
         new_password: str,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Reset a user's password via the Supabase Admin API.
@@ -186,7 +194,16 @@ class UserService(BaseService):
                 status_code=403,
             )
 
-        # --- 1. Verify user exists ---
+        # --- 1. Validate password meets policy ---
+        pw_result: ValidationResult = AuthService.validate_password(new_password)
+        if not pw_result.is_valid:
+            return ServiceResult(
+                success=False,
+                error=pw_result.error_message or "Password does not meet policy requirements.",
+                status_code=400,
+            )
+
+        # --- 2. Verify user exists ---
         user: Optional[User] = self._repo.get_by_id(user_id)
         if user is None:
             return ServiceResult(
@@ -195,7 +212,7 @@ class UserService(BaseService):
                 status_code=404,
             )
 
-        # --- 2. Call Supabase Admin API ---
+        # --- 3. Call Supabase Admin API ---
         try:
             self._db.supabase.auth.admin.update_user_by_id(
                 user_id,
@@ -213,11 +230,11 @@ class UserService(BaseService):
             self._logger.error("Password reset failed for %s: %s", user_id, exc)
             return ServiceResult(
                 success=False,
-                error=f"Could not reset password: {exc}",
+                error="Could not reset password. Please try again or contact your administrator.",
                 status_code=500,
             )
 
-        # --- 3. Audit trail ---
+        # --- 4. Audit trail (dual: log + SQLite) ---
         log_audit_event(
             logger=self._logger,
             action="RESET_PASSWORD",
@@ -225,6 +242,7 @@ class UserService(BaseService):
             entity_id=user_id,
             user_id=current_user.id,
             details={"performed_by": current_user.full_name},
+            conn=self._repo.sqlite,
         )
 
         self._logger.info("Password reset for user %s", user.full_name)
@@ -242,7 +260,7 @@ class UserService(BaseService):
         user_id: str,
         full_name: str,
         role: UserRole,
-    ) -> None:
+    ) -> bool:
         """
         Push role/full_name into Supabase Auth user_metadata.
 
@@ -263,12 +281,15 @@ class UserService(BaseService):
             self._logger.info(
                 "Updated Supabase metadata for %s: role=%s", full_name, role,
             )
+            return True
         except RuntimeError:
             self._logger.warning(
                 "Supabase client not initialized -- metadata not updated. "
                 "Role change may be reverted by JIT provisioning on next request.",
             )
+            return False
         except Exception as exc:
             self._logger.error(
                 "Failed to update Supabase metadata for %s: %s", full_name, exc,
             )
+            return False

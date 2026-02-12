@@ -17,7 +17,7 @@ import smtplib
 from email.message import EmailMessage
 from typing import Optional, Union
 
-from app.config import AppConfig, get_config
+from app.config import AppConfig
 from app.logger import StructuredLogger
 from app.models.service_models import ServiceResult
 from app.models.transaction import Transaction
@@ -32,10 +32,12 @@ class EmailService(BaseService):
     def __init__(
         self,
         user_repo: UserRepository,
+        config: AppConfig,
         logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
         self._user_repo = user_repo
+        self._config: AppConfig = config
         self._validated: bool = False
 
     # ------------------------------------------------------------------
@@ -55,7 +57,7 @@ class EmailService(BaseService):
         Returns a ServiceResult indicating success or failure so callers
         can react without catching exceptions.
         """
-        config: AppConfig = get_config()
+        config: AppConfig = self._config
 
         # Lazy validation: check email config once per service lifetime
         if not self._validated:
@@ -113,7 +115,7 @@ class EmailService(BaseService):
         Notify the finance inbox and the submitting salesman that a new
         template request has been received.
         """
-        config: AppConfig = get_config()
+        config: AppConfig = self._config
         default_recipient: str = config.MAIL_DEFAULT_RECIPIENT
 
         if not default_recipient or not config.MAIL_USERNAME:
@@ -145,7 +147,7 @@ class EmailService(BaseService):
         Notify the submitting salesman that their transaction has been
         approved or rejected.
         """
-        config: AppConfig = get_config()
+        config: AppConfig = self._config
 
         if not config.MAIL_USERNAME:
             self._logger.warning(
@@ -205,7 +207,7 @@ class EmailService(BaseService):
         try:
             smtp = smtplib.SMTP(config.MAIL_SERVER, config.MAIL_PORT)
             smtp.starttls()
-            smtp.login(config.MAIL_USERNAME, config.MAIL_PASSWORD)
+            smtp.login(config.MAIL_USERNAME, config.MAIL_PASSWORD.get_secret_value())
             smtp.send_message(msg)
 
             self._logger.info(
@@ -226,25 +228,24 @@ class EmailService(BaseService):
 
             return ServiceResult(success=True)
 
-        except smtplib.SMTPAuthenticationError as exc:
+        except smtplib.SMTPAuthenticationError:
             self._logger.error(
-                "SMTP authentication failed for '%s': %s",
+                "SMTP authentication failed for user '%s'",
                 config.MAIL_USERNAME,
-                exc,
             )
             return ServiceResult(
                 success=False,
-                error=f"SMTP authentication failed: {exc}",
+                error="SMTP authentication failed. Check server credentials.",
                 status_code=500,
             )
 
         except smtplib.SMTPException as exc:
             self._logger.error(
-                "SMTP error sending to %s: %s", msg["To"], exc
+                "SMTP error sending to %s: %s", msg["To"], type(exc).__name__
             )
             return ServiceResult(
                 success=False,
-                error=f"SMTP error: {exc}",
+                error=f"SMTP error: {type(exc).__name__}",
                 status_code=500,
             )
 
@@ -265,5 +266,5 @@ class EmailService(BaseService):
             if smtp is not None:
                 try:
                     smtp.quit()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._logger.debug("SMTP quit failed (non-critical): %s", exc)

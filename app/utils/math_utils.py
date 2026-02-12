@@ -7,10 +7,23 @@ No external dependencies (no numpy/scipy needed).
 
 from __future__ import annotations
 
+import math
+
 __all__: list[str] = ["calculate_npv", "calculate_irr"]
 
 # Threshold below which a floating-point value is treated as zero.
 _ZERO_THRESHOLD: float = 1e-12
+
+# Bounds for the Newton-Raphson IRR solver.  Rates outside this range
+# are economically meaningless and indicate divergence.
+_IRR_LOWER_BOUND: float = -0.999
+_IRR_UPPER_BOUND: float = 100.0  # 10,000% — generous upper limit
+
+
+def _validate_finite(value: float, name: str) -> None:
+    """Raise ``ValueError`` if *value* is NaN or +/-Inf."""
+    if math.isnan(value) or math.isinf(value):
+        raise ValueError(f"{name} must be a finite number, got {value!r}.")
 
 
 def calculate_npv(rate: float, cash_flows: list[float]) -> float:
@@ -22,16 +35,22 @@ def calculate_npv(rate: float, cash_flows: list[float]) -> float:
         rate: Discount rate per period (e.g., monthly rate = annual_rate / 12).
               Must be greater than -1.0 to avoid division-by-zero behaviour.
         cash_flows: List of cash flows where index 0 is period 0 (t=0).
-                    Must not be empty.
+                    Must not be empty.  All values must be finite (no NaN/Inf).
 
     Returns:
         The NPV as a float.
 
     Raises:
-        ValueError: If *cash_flows* is empty or *rate* <= -1.0.
+        ValueError: If *cash_flows* is empty, *rate* <= -1.0, or any input
+                    is NaN/Inf.
     """
     if not cash_flows:
         raise ValueError("cash_flows must not be empty.")
+
+    _validate_finite(rate, "rate")
+
+    for i, cf in enumerate(cash_flows):
+        _validate_finite(cf, f"cash_flows[{i}]")
 
     if rate <= -1.0:
         raise ValueError(
@@ -64,7 +83,7 @@ def calculate_irr(
     Args:
         cash_flows: List of cash flows. Must contain at least two entries and
                     at least one sign change (otherwise no meaningful IRR
-                    exists).
+                    exists).  All values must be finite (no NaN/Inf).
         max_iterations: Maximum Newton-Raphson iterations before giving up.
         tolerance: Convergence tolerance for successive rate estimates.
 
@@ -74,12 +93,24 @@ def calculate_irr(
         distinguishes "could not compute" from a genuine 0% IRR.
 
     Raises:
-        ValueError: If *cash_flows* has fewer than 2 entries.
+        ValueError: If *cash_flows* has fewer than 2 entries or contains
+                    NaN/Inf values.
     """
     if len(cash_flows) < 2:
         raise ValueError(
             f"cash_flows must contain at least 2 entries, got {len(cash_flows)}."
         )
+
+    for i, cf in enumerate(cash_flows):
+        _validate_finite(cf, f"cash_flows[{i}]")
+
+    # Pre-check: IRR requires at least one sign change in the cash flows.
+    # Without both positive and negative values, no rate can drive NPV to
+    # zero — return None immediately instead of wasting iterations.
+    has_positive: bool = any(cf > 0 for cf in cash_flows)
+    has_negative: bool = any(cf < 0 for cf in cash_flows)
+    if not has_positive or not has_negative:
+        return None
 
     guess: float = 0.1
 
@@ -101,6 +132,11 @@ def calculate_irr(
             return None
 
         new_guess: float = guess - npv / d_npv
+
+        # Bounds clamping: if the solver diverges outside the economically
+        # meaningful range, clamp it back.  This prevents runaway oscillation
+        # and NaN/Inf propagation from extreme guesses.
+        new_guess = max(_IRR_LOWER_BOUND, min(_IRR_UPPER_BOUND, new_guess))
 
         if abs(new_guess - guess) < tolerance:
             return new_guess

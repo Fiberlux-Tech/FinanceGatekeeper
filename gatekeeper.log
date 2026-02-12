@@ -1,0 +1,86 @@
+{"timestamp": "2026-02-12T18:15:54.547935+00:00", "level": "INFO", "logger_name": "main", "message": "Starting FinanceGatekeeper..."}
+{"timestamp": "2026-02-12T18:15:55.360721+00:00", "level": "INFO", "logger_name": "database", "message": "Supabase client initialized."}
+{"timestamp": "2026-02-12T18:15:55.372927+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite database opened at gatekeeper_local.db"}
+{"timestamp": "2026-02-12T18:15:55.374647+00:00", "level": "INFO", "logger_name": "schema", "message": "Upgrading schema from version 4 to 7 …"}
+{"timestamp": "2026-02-12T18:15:55.374956+00:00", "level": "INFO", "logger_name": "schema", "message": "Applying 3 migration(s): 5 → 6 → 7"}
+{"timestamp": "2026-02-12T18:15:55.375263+00:00", "level": "INFO", "logger_name": "schema", "message": "Running migration to version 5 …"}
+{"timestamp": "2026-02-12T18:15:55.389899+00:00", "level": "INFO", "logger_name": "schema", "message": "Migration v4→v5: added file_sha256 column to transactions."}
+{"timestamp": "2026-02-12T18:15:55.390936+00:00", "level": "INFO", "logger_name": "schema", "message": "Running migration to version 6 …"}
+{"timestamp": "2026-02-12T18:15:55.405081+00:00", "level": "INFO", "logger_name": "schema", "message": "Migration v5→v6: recreated fixed_costs and recurring_services with FOREIGN KEY constraints."}
+{"timestamp": "2026-02-12T18:15:55.406262+00:00", "level": "INFO", "logger_name": "schema", "message": "Running migration to version 7 …"}
+{"timestamp": "2026-02-12T18:15:55.407986+00:00", "level": "INFO", "logger_name": "schema", "message": "Migration v6→v7: changed company_id and order_id from REAL to INTEGER in transactions table."}
+{"timestamp": "2026-02-12T18:15:55.411566+00:00", "level": "INFO", "logger_name": "schema", "message": "Schema initialised at version 7."}
+{"timestamp": "2026-02-12T18:15:55.425753+00:00", "level": "WARNING", "logger_name": "services", "message": "SharePoint path not found — file watcher disabled: Could not locate the SharePoint sync folder. Set SHAREPOINT_ROOT_OVERRIDE in your .env file to the local path that contains the 01_Inbox directory."}
+{"timestamp": "2026-02-12T18:15:55.426801+00:00", "level": "INFO", "logger_name": "modules", "message": "Module registered: gatekeeper (Gatekeeper)"}
+{"timestamp": "2026-02-12T18:15:55.427049+00:00", "level": "INFO", "logger_name": "main", "message": "Launching GUI..."}
+{"timestamp": "2026-02-12T18:16:14.523716+00:00", "level": "INFO", "logger_name": "session_cache", "message": "Per-machine session salt created at C:\\Users\\sternero\\.fingate_session_salt."}
+{"timestamp": "2026-02-12T18:16:14.874431+00:00", "level": "INFO", "logger_name": "session_cache", "message": "Session cached for user Alex Ternero (sternero@fiberlux.pe)."}
+{"timestamp": "2026-02-12T18:16:14.877368+00:00", "level": "INFO", "logger_name": "services", "message": "User authenticated: Alex Ternero (role: SALES)", "extra": {"event": "LOGIN", "email": "sternero@fiberlux.pe", "user_id": "e17cc44c-9f50-4c68-90e0-d054e4893a3d"}}
+{"timestamp": "2026-02-12T18:16:14.951400+00:00", "level": "INFO", "logger_name": "ui", "message": "Login successful: Alex Ternero"}
+{"timestamp": "2026-02-12T18:16:16.076168+00:00", "level": "INFO", "logger_name": "ui", "message": "Switched to module: gatekeeper"}
+{"timestamp": "2026-02-12T18:16:41.459901+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite connection closed."}
+{"timestamp": "2026-02-12T18:16:41.460706+00:00", "level": "INFO", "logger_name": "main", "message": "FinanceGatekeeper shut down."}
+{"timestamp": "2026-02-12T18:16:41.461553+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite connection closed."}
+{"timestamp": "2026-02-12T20:05:12.998140+00:00", "level": "INFO", "logger_name": "main", "message": "Starting FinanceGatekeeper..."}
+{"timestamp": "2026-02-12T20:05:13.854859+00:00", "level": "INFO", "logger_name": "database", "message": "Supabase client initialized."}
+{"timestamp": "2026-02-12T20:05:13.871096+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite database opened at gatekeeper_local.db"}
+{"timestamp": "2026-02-12T20:05:13.873569+00:00", "level": "INFO", "logger_name": "schema", "message": "Schema is up to date (version 7)."}
+{"timestamp": "2026-02-12T20:05:13.894261+00:00", "level": "WARNING", "logger_name": "services", "message": "SharePoint path not found — file watcher disabled: Could not locate the SharePoint sync folder. Set SHAREPOINT_ROOT_OVERRIDE in your .env file to the local path that contains the 01_Inbox directory."}
+{"timestamp": "2026-02-12T20:05:13.896932+00:00", "level": "INFO", "logger_name": "modules", "message": "Module registered: gatekeeper (Gatekeeper)"}
+{"timestamp": "2026-02-12T20:05:13.897505+00:00", "level": "INFO", "logger_name": "modules", "message": "Module registered: settings (Settings)"}
+{"timestamp": "2026-02-12T20:05:13.897987+00:00", "level": "INFO", "logger_name": "main", "message": "Launching GUI..."}
+{"timestamp": "2026-02-12T20:05:33.112061+00:00", "level": "INFO", "logger_name": "session_cache", "message": "Session cached for user Alex Ternero (sternero@fiberlux.pe)."}
+{"timestamp": "2026-02-12T20:05:33.115741+00:00", "level": "INFO", "logger_name": "services", "message": "User authenticated: Alex Ternero (role: SALES)", "extra": {"event": "LOGIN", "email": "sternero@fiberlux.pe", "user_id": "e17cc44c-9f50-4c68-90e0-d054e4893a3d"}}
+{"timestamp": "2026-02-12T20:05:33.209704+00:00", "level": "INFO", "logger_name": "ui", "message": "Login successful: Alex Ternero"}
+{"timestamp": "2026-02-12T20:05:49.809139+00:00", "level": "INFO", "logger_name": "services", "message": "Validating explicit SharePoint root: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:05:49.812546+00:00", "level": "WARNING", "logger_name": "services", "message": "Archive approved folder not found — will be created on first approval: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\02_Archive_Approved"}
+{"timestamp": "2026-02-12T20:05:49.815042+00:00", "level": "WARNING", "logger_name": "services", "message": "No business-unit subfolders found in C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox. Expected: ['GIGALAN', 'ESTADO', 'CORPORATIVO', 'MAYORISTA']"}
+{"timestamp": "2026-02-12T20:05:49.815584+00:00", "level": "INFO", "logger_name": "services", "message": "Path discovery complete. Inbox: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox | BUs: []"}
+{"timestamp": "2026-02-12T20:05:51.288391+00:00", "level": "INFO", "logger_name": "services", "message": "Validating explicit SharePoint root: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:05:51.289607+00:00", "level": "WARNING", "logger_name": "services", "message": "Archive approved folder not found — will be created on first approval: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\02_Archive_Approved"}
+{"timestamp": "2026-02-12T20:05:51.292205+00:00", "level": "WARNING", "logger_name": "services", "message": "No business-unit subfolders found in C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox. Expected: ['GIGALAN', 'ESTADO', 'CORPORATIVO', 'MAYORISTA']"}
+{"timestamp": "2026-02-12T20:05:51.293010+00:00", "level": "INFO", "logger_name": "services", "message": "Path discovery complete. Inbox: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox | BUs: []"}
+{"timestamp": "2026-02-12T20:05:51.298740+00:00", "level": "INFO", "logger_name": "services", "message": "app_settings[sharepoint_root_path] updated."}
+{"timestamp": "2026-02-12T20:05:51.380979+00:00", "level": "INFO", "logger_name": "ui", "message": "SharePoint path configured: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:05:52.493928+00:00", "level": "INFO", "logger_name": "ui", "message": "Switched to module: gatekeeper"}
+{"timestamp": "2026-02-12T20:05:52.496841+00:00", "level": "INFO", "logger_name": "ui", "message": "File watcher started on: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox"}
+{"timestamp": "2026-02-12T20:05:55.611504+00:00", "level": "INFO", "logger_name": "services", "message": "Validating explicit SharePoint root: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:05:55.612431+00:00", "level": "WARNING", "logger_name": "services", "message": "Archive approved folder not found — will be created on first approval: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\02_Archive_Approved"}
+{"timestamp": "2026-02-12T20:05:55.613087+00:00", "level": "WARNING", "logger_name": "services", "message": "No business-unit subfolders found in C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox. Expected: ['GIGALAN', 'ESTADO', 'CORPORATIVO', 'MAYORISTA']"}
+{"timestamp": "2026-02-12T20:05:55.613431+00:00", "level": "INFO", "logger_name": "services", "message": "Path discovery complete. Inbox: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox | BUs: []"}
+{"timestamp": "2026-02-12T20:05:55.665904+00:00", "level": "INFO", "logger_name": "ui", "message": "Switched to module: settings"}
+{"timestamp": "2026-02-12T20:06:03.470375+00:00", "level": "INFO", "logger_name": "ui", "message": "Switched to module: gatekeeper"}
+{"timestamp": "2026-02-12T20:06:19.663367+00:00", "level": "INFO", "logger_name": "test_db", "message": "Supabase client initialized."}
+{"timestamp": "2026-02-12T20:06:19.673704+00:00", "level": "INFO", "logger_name": "test_db", "message": "SQLite database opened at gatekeeper_local.db"}
+{"timestamp": "2026-02-12T20:06:19.675894+00:00", "level": "INFO", "logger_name": "test_schema", "message": "Schema is up to date (version 7)."}
+{"timestamp": "2026-02-12T20:06:19.678562+00:00", "level": "INFO", "logger_name": "services", "message": "Using stored SharePoint root: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:06:19.678892+00:00", "level": "INFO", "logger_name": "services", "message": "SharePoint root resolved: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER"}
+{"timestamp": "2026-02-12T20:06:19.679353+00:00", "level": "WARNING", "logger_name": "services", "message": "Archive approved folder not found — will be created on first approval: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\02_Archive_Approved"}
+{"timestamp": "2026-02-12T20:06:19.679800+00:00", "level": "WARNING", "logger_name": "services", "message": "No business-unit subfolders found in C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox. Expected: ['GIGALAN', 'ESTADO', 'CORPORATIVO', 'MAYORISTA']"}
+{"timestamp": "2026-02-12T20:06:19.680039+00:00", "level": "INFO", "logger_name": "services", "message": "Path discovery complete. Inbox: C:\\Users\\sternero\\OneDrive - FIBERLUX S.A.C\\Financial Planning Team - Documents\\18_PLANTILLAS_GATEKEEPER\\01_Inbox | BUs: []"}
+{"timestamp": "2026-02-12T20:06:19.680567+00:00", "level": "INFO", "logger_name": "test_db", "message": "SQLite connection closed."}
+{"timestamp": "2026-02-12T20:06:31.403400+00:00", "level": "INFO", "logger_name": "ui", "message": "Switched to module: settings"}
+{"timestamp": "2026-02-12T20:06:40.680558+00:00", "level": "WARNING", "logger_name": "audit_test", "message": "Supabase credentials not configured — running in offline mode."}
+{"timestamp": "2026-02-12T20:06:40.681786+00:00", "level": "INFO", "logger_name": "audit_test", "message": "SQLite database opened at :memory:"}
+{"timestamp": "2026-02-12T20:06:40.683111+00:00", "level": "INFO", "logger_name": "audit_test", "message": "Upgrading schema from version 0 to 7 …"}
+{"timestamp": "2026-02-12T20:06:40.698426+00:00", "level": "INFO", "logger_name": "audit_test", "message": "All 10 tables created or verified successfully."}
+{"timestamp": "2026-02-12T20:06:40.698926+00:00", "level": "INFO", "logger_name": "audit_test", "message": "Schema initialised at version 7."}
+{"timestamp": "2026-02-12T20:06:55.152946+00:00", "level": "WARNING", "logger_name": "audit_test", "message": "Supabase credentials not configured — running in offline mode."}
+{"timestamp": "2026-02-12T20:06:55.153676+00:00", "level": "INFO", "logger_name": "audit_test", "message": "SQLite database opened at :memory:"}
+{"timestamp": "2026-02-12T20:06:55.154735+00:00", "level": "INFO", "logger_name": "audit_test", "message": "Upgrading schema from version 0 to 7 …"}
+{"timestamp": "2026-02-12T20:06:55.155521+00:00", "level": "INFO", "logger_name": "audit_test", "message": "All 10 tables created or verified successfully."}
+{"timestamp": "2026-02-12T20:06:55.155725+00:00", "level": "INFO", "logger_name": "audit_test", "message": "Schema initialised at version 7."}
+{"timestamp": "2026-02-12T20:06:55.155947+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[test_key] updated."}
+{"timestamp": "2026-02-12T20:06:55.156291+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[sharepoint_root_path] updated."}
+{"timestamp": "2026-02-12T20:06:55.175446+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[thread_key_0] updated."}
+{"timestamp": "2026-02-12T20:06:55.176116+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[thread_key_1] updated."}
+{"timestamp": "2026-02-12T20:06:55.176870+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[thread_key_2] updated."}
+{"timestamp": "2026-02-12T20:06:55.177269+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[thread_key_3] updated."}
+{"timestamp": "2026-02-12T20:06:55.177832+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[thread_key_4] updated."}
+{"timestamp": "2026-02-12T20:06:55.178464+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[upsert_key] updated."}
+{"timestamp": "2026-02-12T20:06:55.178714+00:00", "level": "INFO", "logger_name": "audit_test", "message": "app_settings[upsert_key] updated."}
+{"timestamp": "2026-02-12T20:06:55.178930+00:00", "level": "INFO", "logger_name": "audit_test", "message": "SQLite connection closed."}
+{"timestamp": "2026-02-12T20:08:04.736496+00:00", "level": "INFO", "logger_name": "ui", "message": "File watcher stopped."}
+{"timestamp": "2026-02-12T20:08:04.961723+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite connection closed."}
+{"timestamp": "2026-02-12T20:08:04.963919+00:00", "level": "INFO", "logger_name": "main", "message": "FinanceGatekeeper shut down."}
+{"timestamp": "2026-02-12T20:08:04.965823+00:00", "level": "INFO", "logger_name": "database", "message": "SQLite connection closed."}

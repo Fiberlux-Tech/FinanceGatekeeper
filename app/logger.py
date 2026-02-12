@@ -9,7 +9,9 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
-from typing import TextIO, Union
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Optional, TextIO, Union
 
 
 class JSONFormatter(logging.Formatter):
@@ -22,6 +24,15 @@ class JSONFormatter(logging.Formatter):
         - message
         - extra      (optional structured fields passed via the `extra` kwarg)
     """
+
+    # Pre-compute the set of standard LogRecord attribute names once at
+    # class definition time, avoiding a fresh LogRecord allocation on
+    # every ``format()`` call (M-5 thread-safety / performance fix).
+    _STANDARD_ATTRS: frozenset[str] = frozenset(
+        logging.LogRecord(
+            name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+        ).__dict__.keys()
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         entry: dict[str, Union[str, dict[str, str]]] = {
@@ -36,15 +47,10 @@ class JSONFormatter(logging.Formatter):
         # Capture any structured extra fields attached by the caller.
         # Standard LogRecord attributes are excluded so only user-supplied
         # context appears under the "extra" key.
-        standard_attrs: frozenset[str] = frozenset(
-            logging.LogRecord(
-                name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
-            ).__dict__.keys()
-        )
         extra_fields: dict[str, str] = {
             key: str(value)
             for key, value in record.__dict__.items()
-            if key not in standard_attrs
+            if key not in self._STANDARD_ATTRS
         }
         if extra_fields:
             entry["extra"] = extra_fields
@@ -77,21 +83,52 @@ class StructuredLogger:
                 self._log = logger
     """
 
+    # Default log file configuration
+    _DEFAULT_LOG_FILE: str = "gatekeeper.log"
+    _MAX_BYTES: int = 5_242_880  # 5 MB
+    _BACKUP_COUNT: int = 3
+
     def __init__(
         self,
         name: str = "gatekeeper",
-        level: int = logging.DEBUG,
+        level: int = logging.INFO,
         stream: Union[TextIO, None] = None,
+        log_file: Optional[str] = None,
     ) -> None:
         self._logger: logging.Logger = logging.getLogger(name)
         self._logger.setLevel(level)
 
         # Prevent duplicate handlers when the same name is reused.
         if not self._logger.handlers:
-            handler = logging.StreamHandler(stream or sys.stdout)
-            handler.setLevel(level)
-            handler.setFormatter(JSONFormatter())
-            self._logger.addHandler(handler)
+            formatter = JSONFormatter()
+
+            # Stream handler (stdout)
+            stream_handler = logging.StreamHandler(stream or sys.stdout)
+            stream_handler.setLevel(level)
+            stream_handler.setFormatter(formatter)
+            self._logger.addHandler(stream_handler)
+
+            # Rotating file handler — graceful fallback on permission errors
+            resolved_log_file: str = log_file or self._DEFAULT_LOG_FILE
+            try:
+                log_path = Path(resolved_log_file)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                file_handler = RotatingFileHandler(
+                    filename=str(log_path),
+                    maxBytes=self._MAX_BYTES,
+                    backupCount=self._BACKUP_COUNT,
+                    encoding="utf-8",
+                )
+                file_handler.setLevel(level)
+                file_handler.setFormatter(formatter)
+                self._logger.addHandler(file_handler)
+            except (PermissionError, OSError) as exc:
+                self._logger.warning(
+                    "Could not create log file '%s': %s. "
+                    "Continuing with console logging only.",
+                    resolved_log_file,
+                    exc,
+                )
 
     # -- Public attribute -----------------------------------------------------
 

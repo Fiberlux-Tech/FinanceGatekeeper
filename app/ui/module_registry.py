@@ -57,6 +57,12 @@ class ModuleEntry:
         self.factory = factory
         self.required_roles = required_roles
 
+    def __repr__(self) -> str:
+        return (
+            f"ModuleEntry(module_id={self.module_id!r}, "
+            f"display_name={self.display_name!r})"
+        )
+
 
 class ModuleRegistry:
     """Manages the collection of registered modules.

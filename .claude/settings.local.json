@@ -16,7 +16,15 @@
       "Bash(npm install:*)",
       "Bash(npx supabase:*)",
       "Bash(where:*)",
-      "Bash(winget install:*)"
+      "Bash(winget install:*)",
+      "Bash(find:*)",
+      "Bash(if exist gatekeeper_local.db del /f gatekeeper_local.db)",
+      "Bash(if exist gatekeeper_local.db-shm del /f gatekeeper_local.db-shm)",
+      "Bash(if exist gatekeeper_local.db-wal del /f gatekeeper_local.db-wal)",
+      "Bash(sqlite3:*)",
+      "Bash(python3:*)",
+      "Bash(findstr:*)",
+      "Bash(ls:*)"
     ]
   }
 }

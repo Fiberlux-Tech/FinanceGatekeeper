@@ -12,7 +12,7 @@ consume without knowing the internal dependency graph.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 from app.auth import SessionManager
 from app.config import AppConfig
@@ -23,11 +23,16 @@ from app.repositories.master_variable_repository import MasterVariableRepository
 from app.repositories.recurring_service_repository import RecurringServiceRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.repositories.user_repository import UserRepository
+from app.services.app_settings_service import AppSettingsService
 from app.services.auth_service import AuthService
 from app.services.email_service import EmailService
 from app.services.excel_parser import ExcelParserService
+from app.services.file_guards import FileGuardsService
+from app.services.file_watcher import FileWatcherService
 from app.services.jit_provisioning import JITProvisioningService
 from app.services.kpi import KPIService
+from app.services.native_opener import NativeOpenerService
+from app.services.path_discovery import PathDiscoveryService
 from app.services.transaction_crud import TransactionCrudService
 from app.services.transaction_preview import TransactionPreviewService
 from app.services.transaction_workflow import TransactionWorkflowService
@@ -36,9 +41,14 @@ from app.services.users import UserService
 from app.services.variables import VariableService
 
 
-class ServiceContainer(TypedDict):
-    """Typed container for all application services."""
+class ServiceContainer(TypedDict, total=False):
+    """Typed container for all application services.
 
+    Services marked ``Optional`` may be ``None`` when the required
+    infrastructure (e.g. SharePoint sync folder) is unavailable.
+    """
+
+    # --- Core (always present) ---
     auth_service: AuthService
     variable_service: VariableService
     user_service: UserService
@@ -49,6 +59,15 @@ class ServiceContainer(TypedDict):
     transaction_crud_service: TransactionCrudService
     transaction_workflow_service: TransactionWorkflowService
     transaction_preview_service: TransactionPreviewService
+
+    # --- Infrastructure ---
+    app_settings_service: AppSettingsService
+
+    # --- Phase 2: Observer & Native Interaction ---
+    path_discovery_service: PathDiscoveryService
+    file_guards_service: FileGuardsService
+    native_opener_service: NativeOpenerService
+    file_watcher_service: Optional[FileWatcherService]
 
 
 def create_services(
@@ -105,6 +124,7 @@ def create_services(
     )
     email_service = EmailService(
         user_repo=user_repo,
+        config=config,
         logger=logger,
     )
     transaction_preview_service = TransactionPreviewService(
@@ -117,6 +137,7 @@ def create_services(
         jit_service=jit_provisioning_service,
         session_cache=session_cache,
         logger=logger,
+        user_repo=user_repo,
     )
 
     # ------------------------------------------------------------------
@@ -124,6 +145,7 @@ def create_services(
     # ------------------------------------------------------------------
     excel_parser_service = ExcelParserService(
         variable_service=variable_service,
+        config=config,
         logger=logger,
     )
     transaction_crud_service = TransactionCrudService(
@@ -143,6 +165,33 @@ def create_services(
         logger=logger,
     )
 
+    # ------------------------------------------------------------------
+    # 4. Infrastructure — persistent app settings
+    # ------------------------------------------------------------------
+    app_settings_service = AppSettingsService(db=db, logger=logger)
+
+    # ------------------------------------------------------------------
+    # 5. Phase 2 — Observer & Native Interaction services
+    # ------------------------------------------------------------------
+    path_discovery_service = PathDiscoveryService(config=config, logger=logger)
+    file_guards_service = FileGuardsService(config=config, logger=logger)
+    native_opener_service = NativeOpenerService(logger=logger)
+
+    file_watcher_service: Optional[FileWatcherService] = None
+    try:
+        stored_root = app_settings_service.get_sharepoint_root()
+        resolved_paths = path_discovery_service.resolve(stored_root=stored_root)
+        file_watcher_service = FileWatcherService(
+            inbox_path=resolved_paths.inbox,
+            file_guards=file_guards_service,
+            config=config,
+            logger=logger,
+        )
+    except FileNotFoundError as exc:
+        logger.warning(
+            "SharePoint path not found — file watcher disabled: %s", exc,
+        )
+
     return ServiceContainer(
         auth_service=auth_service,
         variable_service=variable_service,
@@ -154,4 +203,9 @@ def create_services(
         transaction_crud_service=transaction_crud_service,
         transaction_workflow_service=transaction_workflow_service,
         transaction_preview_service=transaction_preview_service,
+        app_settings_service=app_settings_service,
+        path_discovery_service=path_discovery_service,
+        file_guards_service=file_guards_service,
+        native_opener_service=native_opener_service,
+        file_watcher_service=file_watcher_service,
     )

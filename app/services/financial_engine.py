@@ -11,9 +11,16 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from app.models.enums import Currency
-from app.models.service_models import CommissionInput
+from app.models.service_models import (
+    CommissionInput,
+    FinancialEngineInput,
+    FinancialMetricsResult,
+    FixedCostInput,
+    KPIResult,
+    RecurringServiceInput,
+)
 from app.services.commission_rules import calculate_commission
-from app.utils.math_utils import calculate_npv, calculate_irr
+from app.utils.math_utils import calculate_irr, calculate_npv
 
 __all__ = [
     "CurrencyConverter",
@@ -28,14 +35,9 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Type aliases for complex dict structures used throughout this module.
+# Timeline type aliases — kept as TypeAliases because the timeline is a
+# deeply nested dict structure that serves as output only.
 # ---------------------------------------------------------------------------
-ServiceItem = dict[str, Union[int, float, str, None]]
-FixedCostItem = dict[str, Union[int, float, str, None]]
-
-# Timeline dicts contain heterogeneous nested structures (lists of floats,
-# dicts of lists, label strings).  We model the value side as a recursive
-# Union that captures every concrete type stored inside.
 _TimelineLeaf = Union[float, int, str, None]
 _TimelineValue = Union[
     _TimelineLeaf,
@@ -44,23 +46,6 @@ _TimelineValue = Union[
     list[dict[str, Union[_TimelineLeaf, list[_TimelineLeaf]]]],
 ]
 TimelineDict = dict[str, _TimelineValue]
-
-KPIResult = dict[str, Union[float, int, None]]
-FinancialMetricsResult = dict[str, Union[float, int, bool, None, TimelineDict]]
-
-# Type alias for the heterogeneous mutable data dict passed through the
-# orchestrator.  Captures every concrete type that callers store as values.
-_DataValue = Union[
-    int,
-    float,
-    str,
-    bool,
-    None,
-    list[ServiceItem],
-    list[FixedCostItem],
-    Currency,
-]
-TransactionData = dict[str, _DataValue]
 
 
 # --- 1. CurrencyConverter ---
@@ -92,13 +77,16 @@ class CurrencyConverter:
 # --- 2. RecurringServiceProcessor ---
 
 def process_recurring_services(
-    services: list[ServiceItem],
+    services: list[RecurringServiceInput],
     converter: CurrencyConverter,
-) -> tuple[list[ServiceItem], float, float]:
+) -> tuple[list[RecurringServiceInput], float, float]:
     """Enrich each service with PEN fields and return aggregates.
 
+    Returns new ``RecurringServiceInput`` instances with computed PEN
+    fields populated.  The original input models are not modified.
+
     Args:
-        services: List of recurring service dicts to enrich in-place.
+        services: List of recurring service models to enrich.
         converter: Currency converter with the active exchange rate.
 
     Returns:
@@ -107,28 +95,34 @@ def process_recurring_services(
     """
     mrc_sum_orig: float = 0.0
     total_monthly_expense_pen: float = 0.0
+    enriched: list[RecurringServiceInput] = []
 
     for item in services:
-        q: int = item.get('quantity') or 0
+        q: int = item.quantity or 0
 
-        p_original: float = item.get('price_original') or 0.0
-        p_currency: str = item.get('price_currency', Currency.PEN)
+        p_original: float = item.price_original or 0.0
+        p_currency: Currency = item.price_currency
         p_pen: float = converter.to_pen(p_original, p_currency)
-        item['price_pen'] = p_pen
-        item['ingreso_pen'] = p_pen * q
+        ingreso_pen: float = p_pen * q
         mrc_sum_orig += p_original * q
 
-        cu1_original: float = item.get('cost_unit_1_original') or 0.0
-        cu2_original: float = item.get('cost_unit_2_original') or 0.0
-        cu_currency: str = item.get('cost_unit_currency', Currency.USD)
+        cu1_original: float = item.cost_unit_1_original or 0.0
+        cu2_original: float = item.cost_unit_2_original or 0.0
+        cu_currency: Currency = item.cost_unit_currency
         cu1_pen: float = converter.to_pen(cu1_original, cu_currency)
         cu2_pen: float = converter.to_pen(cu2_original, cu_currency)
-        item['cost_unit_1_pen'] = cu1_pen
-        item['cost_unit_2_pen'] = cu2_pen
-        item['egreso_pen'] = (cu1_pen + cu2_pen) * q
-        total_monthly_expense_pen += item['egreso_pen']
+        egreso_pen: float = (cu1_pen + cu2_pen) * q
+        total_monthly_expense_pen += egreso_pen
 
-    return services, total_monthly_expense_pen, mrc_sum_orig
+        enriched.append(item.model_copy(update={
+            "price_pen": p_pen,
+            "ingreso_pen": ingreso_pen,
+            "cost_unit_1_pen": cu1_pen,
+            "cost_unit_2_pen": cu2_pen,
+            "egreso_pen": egreso_pen,
+        }))
+
+    return enriched, total_monthly_expense_pen, mrc_sum_orig
 
 
 # --- 3. MRCResolver ---
@@ -166,30 +160,38 @@ def resolve_mrc(
 # --- 4. FixedCostProcessor ---
 
 def process_fixed_costs(
-    fixed_costs: list[FixedCostItem],
+    fixed_costs: list[FixedCostInput],
     converter: CurrencyConverter,
-) -> tuple[list[FixedCostItem], float]:
+) -> tuple[list[FixedCostInput], float]:
     """Normalize fixed costs to PEN and calculate the total.
 
+    Returns new ``FixedCostInput`` instances with computed PEN fields
+    populated.  The original input models are not modified.
+
     Args:
-        fixed_costs: List of fixed cost dicts to enrich in-place.
+        fixed_costs: List of fixed cost models to enrich.
         converter: Currency converter with the active exchange rate.
 
     Returns:
         Tuple of (enriched_costs, total_installation_pen).
     """
     total_installation_pen: float = 0.0
+    enriched: list[FixedCostInput] = []
 
     for item in fixed_costs:
-        cantidad: int = item.get('cantidad') or 0
-        costo_unitario_original: float = item.get('costo_unitario_original') or 0.0
-        costo_unitario_currency: str = item.get('costo_unitario_currency', Currency.USD)
+        cantidad: int = item.cantidad or 0
+        costo_unitario_original: float = item.costo_unitario_original or 0.0
+        costo_unitario_currency: Currency = item.costo_unitario_currency
         costo_unitario_pen: float = converter.to_pen(costo_unitario_original, costo_unitario_currency)
-        item['costo_unitario_pen'] = costo_unitario_pen
-        item['total_pen'] = cantidad * costo_unitario_pen
-        total_installation_pen += item['total_pen']
+        total_pen: float = cantidad * costo_unitario_pen
+        total_installation_pen += total_pen
 
-    return fixed_costs, total_installation_pen
+        enriched.append(item.model_copy(update={
+            "costo_unitario_pen": costo_unitario_pen,
+            "total_pen": total_pen,
+        }))
+
+    return enriched, total_installation_pen
 
 
 # --- 5. CartaFianzaCalculator ---
@@ -229,44 +231,42 @@ def calculate_carta_fianza(
 # --- 6. CommissionCoordinator ---
 
 def _prepare_and_calculate_commission(
-    data: TransactionData,
+    unidad_negocio: str,
+    plazo_contrato: int,
     total_revenue: float,
-    gross_margin_pre: float,
     gross_margin_ratio: float,
     mrc_pen: float,
+    payback: Optional[int],
+    gigalan_region: Optional[str],
+    gigalan_sale_type: Optional[str],
+    gigalan_old_mrc: Optional[float],
 ) -> float:
-    """Prepare financial context on *data* and delegate to the commission rules engine.
-
-    Injects pre-computed financial aggregates into the data dict so that the
-    commission rules engine receives all the values it needs, then constructs
-    a validated ``CommissionInput`` and calls ``calculate_commission``.
+    """Construct a ``CommissionInput`` from explicit params and delegate to the rules engine.
 
     Args:
-        data: Mutable transaction data dict (enriched in-place with revenue
-              and margin fields).
+        unidad_negocio: Business unit code.
+        plazo_contrato: Contract term in months.
         total_revenue: Total deal revenue in PEN.
-        gross_margin_pre: Gross margin before commission in PEN.
         gross_margin_ratio: Gross margin as a ratio (0.0 -- 1.0).
         mrc_pen: Monthly recurring charge in PEN.
+        payback: Payback period (months), or None if not computed.
+        gigalan_region: GIGALAN region (optional).
+        gigalan_sale_type: GIGALAN sale type (optional).
+        gigalan_old_mrc: GIGALAN old MRC for upsell calculations (optional).
 
     Returns:
         The calculated commission amount in PEN.
     """
-    data['total_revenue'] = total_revenue
-    data['gross_margin'] = gross_margin_pre
-    data['gross_margin_ratio'] = gross_margin_ratio
-    data['mrc_pen'] = mrc_pen
-
     commission_input: CommissionInput = CommissionInput(
-        unidad_negocio=str(data.get('unidad_negocio', '')),
+        unidad_negocio=unidad_negocio,
         total_revenue=total_revenue,
         mrc_pen=mrc_pen,
-        plazo_contrato=int(data.get('plazo_contrato', 0)),
-        payback=data.get('payback'),
+        plazo_contrato=plazo_contrato,
+        payback=payback,
         gross_margin_ratio=gross_margin_ratio,
-        gigalan_region=data.get('gigalan_region'),
-        gigalan_sale_type=data.get('gigalan_sale_type'),
-        gigalan_old_mrc=data.get('gigalan_old_mrc'),
+        gigalan_region=gigalan_region,
+        gigalan_sale_type=gigalan_sale_type,
+        gigalan_old_mrc=gigalan_old_mrc,
     )
 
     return calculate_commission(commission_input)
@@ -306,7 +306,7 @@ def build_timeline(
     comisiones: float,
     carta_fianza_pen: float,
     monthly_expense_pen: float,
-    fixed_costs: list[FixedCostItem],
+    fixed_costs: list[FixedCostInput],
 ) -> tuple[TimelineDict, float, list[float]]:
     """Build period-by-period cash flow timeline.
 
@@ -317,7 +317,7 @@ def build_timeline(
         comisiones: Commission amount in PEN (expensed at t=0).
         carta_fianza_pen: Carta Fianza cost in PEN (expensed at t=0).
         monthly_expense_pen: Recurring monthly expense in PEN.
-        fixed_costs: List of fixed cost items with distribution params.
+        fixed_costs: List of fixed cost models with distribution params.
 
     Returns:
         Tuple of (timeline_dict, total_fixed_costs_applied_pen,
@@ -338,9 +338,9 @@ def build_timeline(
     # C. Fixed costs distribution
     total_fixed_costs_applied_pen: float = 0.0
     for cost_item in fixed_costs:
-        cost_total_pen: float = cost_item.get('total_pen', 0.0)
-        periodo_inicio: int = int(cost_item.get('periodo_inicio', 0) or 0)
-        duracion_meses: int = int(cost_item.get('duracion_meses', 1) or 1)
+        cost_total_pen: float = cost_item.total_pen or 0.0
+        periodo_inicio: int = cost_item.periodo_inicio or 0
+        duracion_meses: int = max(cost_item.duracion_meses or 1, 1)
 
         cost_timeline_values: list[float] = [0.0] * num_periods
         distributed_cost: float = cost_total_pen / duracion_meses
@@ -352,9 +352,9 @@ def build_timeline(
                 total_fixed_costs_applied_pen += distributed_cost
 
         timeline['expenses']['fixed_costs'].append({
-            "id": cost_item.get('id'),
-            "categoria": cost_item.get('categoria'),
-            "tipo_servicio": cost_item.get('tipo_servicio'),
+            "id": cost_item.id,
+            "categoria": cost_item.categoria,
+            "tipo_servicio": cost_item.tipo_servicio,
             "total": cost_total_pen,
             "periodo_inicio": periodo_inicio,
             "duracion_meses": duracion_meses,
@@ -396,8 +396,8 @@ def calculate_kpis(
         costo_capital_anual: Annual cost of capital (decimal, not percentage).
 
     Returns:
-        Dict with keys: van, tir, payback, total_revenue, total_expense,
-        gross_margin, gross_margin_ratio.
+        ``KPIResult`` model with van, tir, payback, total_revenue,
+        total_expense, gross_margin, and gross_margin_ratio.
     """
     monthly_discount_rate: float = costo_capital_anual / 12
     van: float = calculate_npv(monthly_discount_rate, net_cash_flow_list)
@@ -413,28 +413,34 @@ def calculate_kpis(
 
     gross_margin: float = total_revenue - total_expense
 
-    return {
-        'van': van,
-        'tir': tir,
-        'payback': payback,
-        'total_revenue': total_revenue,
-        'total_expense': total_expense,
-        'gross_margin': gross_margin,
-        'gross_margin_ratio': (gross_margin / total_revenue) if total_revenue else 0.0,
-    }
+    return KPIResult(
+        van=van,
+        tir=tir,
+        payback=payback,
+        total_revenue=total_revenue,
+        total_expense=total_expense,
+        gross_margin=gross_margin,
+        gross_margin_ratio=(gross_margin / total_revenue) if total_revenue else 0.0,
+    )
 
 
 # --- 9. Main Orchestrator ---
 
-def calculate_financial_metrics(data: TransactionData) -> FinancialMetricsResult:
+def calculate_financial_metrics(
+    data: Union[FinancialEngineInput, dict[str, object]],
+) -> FinancialMetricsResult:
     """Orchestrate all modular financial engine components.
 
     This is the main entry point for financial calculations. It coordinates
     currency conversion, service processing, cost resolution, commission
     computation, timeline generation, and KPI derivation.
 
+    Accepts either a validated ``FinancialEngineInput`` model or a raw dict.
+    When a dict is passed it is validated into the model automatically,
+    preserving backward compatibility with callers that build dicts.
+
     Args:
-        data: Dictionary containing transaction data with keys:
+        data: ``FinancialEngineInput`` model (preferred) or a dict with keys:
             - tipo_cambio: Exchange rate (USD to PEN)
             - plazo_contrato: Contract term in months
             - recurring_services: List of recurring service items
@@ -445,50 +451,60 @@ def calculate_financial_metrics(data: TransactionData) -> FinancialMetricsResult
             - costo_capital_anual: Annual cost of capital for NPV calculation
 
     Returns:
-        Dictionary with calculated financial metrics including van, tir,
-        timeline, commissions, and margin ratios.
+        ``FinancialMetricsResult`` model with calculated financial metrics
+        including van, tir, timeline, commissions, and margin ratios.
     """
-    converter: CurrencyConverter = CurrencyConverter(data.get('tipo_cambio', 1))
-    plazo: int = int(data.get('plazo_contrato', 0))
+    # SAFETY: Deep-copy to isolate the caller's input from engine
+    # internals.  Sub-functions return new model instances (no in-place
+    # mutation), but the copy still prevents accidental coupling if the
+    # caller later inspects or re-uses the original FinancialEngineInput.
+    if isinstance(data, dict):
+        # Validate raw dict into the model (deep copy is implicit in model creation)
+        engine_input: FinancialEngineInput = FinancialEngineInput.model_validate(data)
+    else:
+        engine_input = data.model_copy(deep=True)
+
+    converter: CurrencyConverter = CurrencyConverter(engine_input.tipo_cambio)
+    plazo: int = engine_input.plazo_contrato
 
     # 1. Process recurring services
-    services: list[ServiceItem]
+    services: list[RecurringServiceInput]
     monthly_expense_pen: float
     mrc_sum_orig: float
     services, monthly_expense_pen, mrc_sum_orig = process_recurring_services(
-        data.get('recurring_services', []), converter,
+        engine_input.recurring_services, converter,
     )
 
     # 2. Resolve MRC (override vs. sum from services)
     mrc_orig: float
     mrc_pen: float
     mrc_orig, mrc_pen = resolve_mrc(
-        data.get('mrc_original', 0.0),
+        engine_input.mrc_original,
         mrc_sum_orig,
-        data.get('mrc_currency', Currency.PEN),
+        engine_input.mrc_currency,
         converter,
     )
 
     # 3. NRC normalization
-    nrc_orig: float = data.get('nrc_original', 0.0) or 0.0
-    nrc_pen: float = converter.to_pen(nrc_orig, data.get('nrc_currency', Currency.PEN))
+    nrc_orig: float = engine_input.nrc_original or 0.0
+    nrc_pen: float = converter.to_pen(nrc_orig, engine_input.nrc_currency)
 
     # 4. Fixed costs
-    costs: list[FixedCostItem]
+    costs: list[FixedCostInput]
     installation_pen: float
     costs, installation_pen = process_fixed_costs(
-        data.get('fixed_costs', []), converter,
+        engine_input.fixed_costs, converter,
     )
 
     # 5. Carta Fianza
     cf_orig: float
     cf_pen: float
     cf_orig, cf_pen = calculate_carta_fianza(
-        data.get('aplica_carta_fianza', False),
-        data.get('tasa_carta_fianza', 0.0),
+        engine_input.aplica_carta_fianza,
+        engine_input.tasa_carta_fianza,
         plazo,
         mrc_orig,
-        data.get('mrc_currency', Currency.PEN),
+        engine_input.mrc_currency,
         converter,
     )
 
@@ -500,7 +516,15 @@ def calculate_financial_metrics(data: TransactionData) -> FinancialMetricsResult
 
     # 7. Commission
     comisiones: float = _prepare_and_calculate_commission(
-        data, total_revenue, gm_pre, gm_ratio, mrc_pen,
+        unidad_negocio=engine_input.unidad_negocio,
+        plazo_contrato=plazo,
+        total_revenue=total_revenue,
+        gross_margin_ratio=gm_ratio,
+        mrc_pen=mrc_pen,
+        payback=None,
+        gigalan_region=engine_input.gigalan_region,
+        gigalan_sale_type=engine_input.gigalan_sale_type,
+        gigalan_old_mrc=engine_input.gigalan_old_mrc,
     )
 
     # 8. Timeline
@@ -509,26 +533,32 @@ def calculate_financial_metrics(data: TransactionData) -> FinancialMetricsResult
     ncf_list: list[float]
     timeline, fixed_applied, ncf_list = build_timeline(
         plazo + 1, nrc_pen, mrc_pen, comisiones, cf_pen,
-        monthly_expense_pen, data.get('fixed_costs', []),
+        monthly_expense_pen, engine_input.fixed_costs,
     )
 
     # 9. KPIs
     total_expense: float = comisiones + fixed_applied + (monthly_expense_pen * plazo) + cf_pen
     kpis: KPIResult = calculate_kpis(
-        ncf_list, total_revenue, total_expense, data.get('costo_capital_anual', 0),
+        ncf_list, total_revenue, total_expense, engine_input.costo_capital_anual,
     )
 
-    return {
-        'mrc_original': mrc_orig,
-        'mrc_pen': mrc_pen,
-        'nrc_original': nrc_orig,
-        'nrc_pen': nrc_pen,
-        **kpis,
-        'comisiones': comisiones,
-        'comisiones_rate': (comisiones / total_revenue) if total_revenue else 0.0,
-        'costo_instalacion': fixed_applied,
-        'costo_instalacion_ratio': (fixed_applied / total_revenue) if total_revenue else 0.0,
-        'costo_carta_fianza': cf_pen,
-        'aplica_carta_fianza': data.get('aplica_carta_fianza', False),
-        'timeline': timeline,
-    }
+    return FinancialMetricsResult(
+        mrc_original=mrc_orig,
+        mrc_pen=mrc_pen,
+        nrc_original=nrc_orig,
+        nrc_pen=nrc_pen,
+        van=kpis.van,
+        tir=kpis.tir,
+        payback=kpis.payback,
+        total_revenue=kpis.total_revenue,
+        total_expense=kpis.total_expense,
+        gross_margin=kpis.gross_margin,
+        gross_margin_ratio=kpis.gross_margin_ratio,
+        comisiones=comisiones,
+        comisiones_rate=(comisiones / total_revenue) if total_revenue else 0.0,
+        costo_instalacion=fixed_applied,
+        costo_instalacion_ratio=(fixed_applied / total_revenue) if total_revenue else 0.0,
+        costo_carta_fianza=cf_pen,
+        aplica_carta_fianza=engine_input.aplica_carta_fianza,
+        timeline=timeline,
+    )

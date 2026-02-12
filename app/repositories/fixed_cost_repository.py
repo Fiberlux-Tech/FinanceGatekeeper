@@ -6,13 +6,13 @@ Handles data access for FixedCost line items belonging to transactions.
 
 from __future__ import annotations
 
-from app.logger import StructuredLogger
+import sqlite3
 from typing import Optional
 
+from app.logger import StructuredLogger
 from app.database import DatabaseManager
 from app.models.fixed_cost import FixedCost
 from app.repositories.base_repository import BaseRepository
-from app.utils.string_helpers import normalize_keys, denormalize_keys
 
 
 class FixedCostRepository(BaseRepository):
@@ -22,29 +22,45 @@ class FixedCostRepository(BaseRepository):
 
     def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
-        self._ensure_sqlite_table()
 
-    def _ensure_sqlite_table(self) -> None:
-        """Create the local SQLite cache table if it doesn't exist."""
-        self.sqlite.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                transaction_id TEXT NOT NULL,
-                categoria TEXT,
-                tipo_servicio TEXT,
-                ticket TEXT,
-                ubicacion TEXT,
-                cantidad REAL,
-                costo_unitario_original REAL,
-                costo_unitario_currency TEXT DEFAULT 'USD',
-                costo_unitario_pen REAL,
-                periodo_inicio INTEGER DEFAULT 0,
-                duracion_meses INTEGER DEFAULT 1
+    def get_by_id(self, item_id: int) -> Optional[FixedCost]:
+        """Fetch a single fixed cost by its primary key.
+
+        Tries Supabase first, falls back to SQLite.
+
+        Args:
+            item_id: The integer primary key of the fixed cost row.
+
+        Returns:
+            The FixedCost if found, or None.
+        """
+        try:
+            response = (
+                self.supabase.table(self.TABLE)
+                .select("*")
+                .eq("id", item_id)
+                .maybe_single()
+                .execute()
             )
-            """
-        )
-        self.sqlite.commit()
+            if response.data:
+                return FixedCost(**response.data)
+        except Exception as exc:
+            self._logger.warning(
+                "Supabase unavailable for fixed cost lookup by id: %s", exc
+            )
+
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row:
+                return FixedCost(**dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_id (fixed_costs): %s",
+                sqlite_exc,
+            )
+        return None
 
     def get_by_transaction(self, transaction_id: str) -> list[FixedCost]:
         """Fetch all fixed costs for a transaction."""
@@ -55,26 +71,44 @@ class FixedCostRepository(BaseRepository):
                 .eq("transaction_id", transaction_id)
                 .execute()
             )
-            return [FixedCost(**normalize_keys(row)) for row in response.data]
+            return [FixedCost(**row) for row in response.data]
         except Exception as exc:
             self._logger.warning("Supabase unavailable for fixed costs: %s", exc)
 
-        rows = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
-            (transaction_id,),
-        ).fetchall()
-        return [FixedCost(**dict(row)) for row in rows]
+        try:
+            rows = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
+                (transaction_id,),
+            ).fetchall()
+            return [FixedCost(**dict(row)) for row in rows]
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_transaction (fixed_costs): %s",
+                sqlite_exc,
+            )
+            return []
 
     def replace_for_transaction(
         self, transaction_id: str, costs: list[FixedCost]
     ) -> list[FixedCost]:
-        """
-        Replace all fixed costs for a transaction (atomic delete + insert).
-        Used when recalculating or updating transaction content.
+        """Replace all fixed costs for a transaction.
+
+        Uses a compensating-transaction pattern (C-6 fix): if the INSERT
+        fails after the DELETE, the old rows are re-inserted so that
+        data is never permanently lost.
         """
         created: list[FixedCost] = []
 
         try:
+            # Snapshot existing rows for compensating rollback
+            old_response = (
+                self.supabase.table(self.TABLE)
+                .select("*")
+                .eq("transaction_id", transaction_id)
+                .execute()
+            )
+            old_rows: list[dict[str, object]] = old_response.data or []
+
             # Delete existing
             self.supabase.table(self.TABLE).delete().eq(
                 "transaction_id", transaction_id
@@ -86,15 +120,32 @@ class FixedCostRepository(BaseRepository):
                 for cost in costs:
                     data = cost.model_dump(exclude={"id"})
                     data["transaction_id"] = transaction_id
-                    rows_to_insert.append(denormalize_keys(data))
-                response = (
-                    self.supabase.table(self.TABLE)
-                    .insert(rows_to_insert)
-                    .execute()
-                )
-                created = [
-                    FixedCost(**normalize_keys(row)) for row in response.data
-                ]
+                    rows_to_insert.append(data)
+                try:
+                    response = (
+                        self.supabase.table(self.TABLE)
+                        .insert(rows_to_insert)
+                        .execute()
+                    )
+                    created = [
+                        FixedCost(**row) for row in response.data
+                    ]
+                except Exception as insert_exc:
+                    # Compensating rollback: re-insert old rows
+                    self._logger.error(
+                        "INSERT failed after DELETE for fixed_costs "
+                        "(transaction %s); rolling back: %s",
+                        transaction_id,
+                        insert_exc,
+                    )
+                    if old_rows:
+                        # Strip server-generated IDs so Supabase auto-assigns
+                        restore_rows = [
+                            {k: v for k, v in row.items() if k != "id"}
+                            for row in old_rows
+                        ]
+                        self.supabase.table(self.TABLE).insert(restore_rows).execute()
+                    raise
 
             # Sync to SQLite
             self._replace_in_sqlite(transaction_id, created or costs)
@@ -122,7 +173,7 @@ class FixedCostRepository(BaseRepository):
         for cost in costs:
             data = cost.model_dump(exclude={"id"})
             data["transaction_id"] = transaction_id
-            rows_to_insert.append(denormalize_keys(data))
+            rows_to_insert.append(data)
 
         try:
             response = (
@@ -130,7 +181,7 @@ class FixedCostRepository(BaseRepository):
                 .insert(rows_to_insert)
                 .execute()
             )
-            created = [FixedCost(**normalize_keys(row)) for row in response.data]
+            created = [FixedCost(**row) for row in response.data]
             self._replace_in_sqlite(transaction_id, created)
             return created
         except Exception as exc:
@@ -172,5 +223,5 @@ class FixedCostRepository(BaseRepository):
                     cost.duracion_meses,
                 ),
             )
-        self.sqlite.commit()
+        self._commit()
 

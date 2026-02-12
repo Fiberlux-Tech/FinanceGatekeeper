@@ -7,38 +7,35 @@ Replaces legacy db.session.get(User, pk), User.query, db.session.add/commit patt
 
 from __future__ import annotations
 
-from app.logger import StructuredLogger
+import sqlite3
 from typing import Optional
 
 from app.database import DatabaseManager
-from app.models.user import User
+from app.logger import StructuredLogger
 from app.models.enums import UserRole
+from app.models.user import User
 from app.repositories.base_repository import BaseRepository
-from app.utils.string_helpers import normalize_keys, denormalize_keys
 
 
 class UserRepository(BaseRepository):
-    """Data access layer for User entities."""
+    """Data access layer for User entities.
+
+    **No ``delete()`` method — by design.**
+
+    Users are never hard-deleted.  The audit trail (CLAUDE.md Section 5)
+    requires that every state change is traceable to a real identity.
+    Removing a user row would orphan transaction records, approval logs,
+    and commission history.
+
+    Instead, use :meth:`deactivate` to revoke access.  A deactivated
+    user's role is set to ``UserRole.DEACTIVATED``, which prevents login
+    while preserving all historical associations.
+    """
 
     TABLE = "profiles"
 
     def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
-        self._ensure_sqlite_table()
-
-    def _ensure_sqlite_table(self) -> None:
-        """Create the local SQLite cache table if it doesn't exist."""
-        self.sqlite.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                full_name TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'SALES'
-            )
-            """
-        )
-        self.sqlite.commit()
 
     def get_by_id(self, user_id: str) -> Optional[User]:
         """Fetch a user by primary key. Tries Supabase first, falls back to SQLite."""
@@ -51,18 +48,66 @@ class UserRepository(BaseRepository):
                 .execute()
             )
             if response.data:
-                user = User(**normalize_keys(response.data))
+                user = User(**response.data)
                 self._cache_to_sqlite(user)
                 return user
         except Exception as exc:
             self._logger.warning("Supabase unavailable for user lookup: %s", exc)
 
         # Offline fallback
-        row = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE id = ?", (user_id,)
-        ).fetchone()
-        if row:
-            return User(**dict(row))
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE id = ?", (user_id,)
+            ).fetchone()
+            if row:
+                return User(**dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_id (profiles): %s",
+                sqlite_exc,
+            )
+        return None
+
+    def get_by_email(self, email: str) -> Optional[User]:
+        """Fetch a user by email address.
+
+        Email is the primary identity per CLAUDE.md Section 7.
+        Tries Supabase first, falls back to SQLite.
+
+        Args:
+            email: The user's email address (case-insensitive lookup).
+
+        Returns:
+            The User if found, or None.
+        """
+        normalized_email = email.strip().lower()
+        try:
+            response = (
+                self.supabase.table(self.TABLE)
+                .select("*")
+                .eq("email", normalized_email)
+                .maybe_single()
+                .execute()
+            )
+            if response.data:
+                user = User(**response.data)
+                self._cache_to_sqlite(user)
+                return user
+        except Exception as exc:
+            self._logger.warning("Supabase unavailable for email lookup: %s", exc)
+
+        # Offline fallback
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE email = ?", (normalized_email,)
+            ).fetchone()
+            if row:
+                return User(**dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_email (profiles): %s",
+                sqlite_exc,
+            )
         return None
 
     def get_by_full_name(self, full_name: str) -> Optional[User]:
@@ -76,17 +121,23 @@ class UserRepository(BaseRepository):
                 .execute()
             )
             if response.data:
-                user = User(**normalize_keys(response.data))
+                user = User(**response.data)
                 self._cache_to_sqlite(user)
                 return user
         except Exception as exc:
             self._logger.warning("Supabase unavailable for full_name lookup: %s", exc)
 
-        row = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE full_name = ?", (full_name,)
-        ).fetchone()
-        if row:
-            return User(**dict(row))
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE full_name = ?", (full_name,)
+            ).fetchone()
+            if row:
+                return User(**dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_full_name (profiles): %s",
+                sqlite_exc,
+            )
         return None
 
     def get_all(self) -> list[User]:
@@ -94,31 +145,39 @@ class UserRepository(BaseRepository):
         try:
             response = (
                 self.supabase.table(self.TABLE)
-                .select("id, email, full_name, role")
+                .select("id, email, full_name, role, created_at, updated_at")
                 .execute()
             )
-            users = [User(**normalize_keys(row)) for row in response.data]
+            users = [User(**row) for row in response.data]
             for user in users:
                 self._cache_to_sqlite(user)
             return users
         except Exception as exc:
             self._logger.warning("Supabase unavailable for get_all users: %s", exc)
 
-        rows = self.sqlite.execute(
-            f"SELECT id, email, full_name, role FROM {self.TABLE}"
-        ).fetchall()
-        return [User(**dict(row)) for row in rows]
+        try:
+            rows = self.sqlite.execute(
+                f"SELECT id, email, full_name, role, created_at, updated_at "
+                f"FROM {self.TABLE}"
+            ).fetchall()
+            return [User(**dict(row)) for row in rows]
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_all (profiles): %s",
+                sqlite_exc,
+            )
+            return []
 
     def upsert(self, user: User) -> User:
         """Insert or update a user. Writes to Supabase and caches to SQLite."""
-        data = denormalize_keys(user.model_dump())
+        data = user.model_dump()
         try:
             response = (
                 self.supabase.table(self.TABLE)
                 .upsert(data)
                 .execute()
             )
-            result = User(**normalize_keys(response.data[0]))
+            result = User(**response.data[0])
             self._cache_to_sqlite(result)
             self._logger.info("User upserted: %s", result.id)
             return result
@@ -139,7 +198,7 @@ class UserRepository(BaseRepository):
                 .execute()
             )
             if response.data:
-                user = User(**normalize_keys(response.data[0]))
+                user = User(**response.data[0])
                 self._cache_to_sqlite(user)
                 return user
         except Exception as exc:
@@ -149,23 +208,97 @@ class UserRepository(BaseRepository):
                 f"UPDATE {self.TABLE} SET role = ? WHERE id = ?",
                 (str(new_role), user_id),
             )
-            self.sqlite.commit()
+            self._commit()
             self._queue_pending_sync("update_role", user_id, {"role": str(new_role)})
 
         return self.get_by_id(user_id)
 
-    def _cache_to_sqlite(self, user: User) -> None:
-        """Write user to local SQLite cache for offline access."""
-        self.sqlite.execute(
-            f"""
-            INSERT INTO {self.TABLE} (id, email, full_name, role)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                email = excluded.email,
-                full_name = excluded.full_name,
-                role = excluded.role
-            """,
-            (user.id, user.email, user.full_name, str(user.role)),
+    def deactivate(self, user_id: str) -> bool:
+        """Soft-delete a user by setting their role to ``DEACTIVATED``.
+
+        This is the only supported removal mechanism.  Hard deletion is
+        intentionally forbidden to preserve audit trail integrity
+        (CLAUDE.md Section 5).  A deactivated user retains their row in
+        ``profiles`` — their email, full_name, and historical associations
+        remain intact — but they can no longer authenticate.
+
+        Args:
+            user_id: The UUID of the user to deactivate.
+
+        Returns:
+            ``True`` if the user was found and deactivated (or was already
+            deactivated), ``False`` if the user does not exist.
+        """
+        existing = self.get_by_id(user_id)
+        if existing is None:
+            self._logger.warning(
+                "Cannot deactivate user %s: not found.", user_id,
+            )
+            return False
+
+        if existing.role == UserRole.DEACTIVATED:
+            self._logger.info(
+                "User %s is already deactivated — no-op.", user_id,
+            )
+            return True
+
+        result = self.update_role(user_id, UserRole.DEACTIVATED)
+        if result is not None and result.role == UserRole.DEACTIVATED:
+            self._logger.info("User deactivated: %s", user_id)
+            return True
+
+        self._logger.error(
+            "Deactivation may have failed for user %s — role update "
+            "did not confirm DEACTIVATED status.",
+            user_id,
         )
-        self.sqlite.commit()
+        return False
+
+    def _cache_to_sqlite(self, user: User) -> None:
+        """Write user to local SQLite cache for offline access.
+
+        Caches all six schema columns (id, email, full_name, role,
+        created_at, updated_at) so that offline reads return a fully
+        populated ``User`` model.
+
+        Exceptions are logged but not raised so that a local cache
+        failure never masks a successful Supabase operation (M-33).
+        """
+        created_at_str: str | None = (
+            user.created_at.isoformat() if user.created_at else None
+        )
+        updated_at_str: str | None = (
+            user.updated_at.isoformat() if user.updated_at else None
+        )
+        try:
+            self.sqlite.execute(
+                f"""
+                INSERT INTO {self.TABLE}
+                    (id, email, full_name, role, created_at, updated_at)
+                VALUES (?, ?, ?, ?,
+                        COALESCE(?, CURRENT_TIMESTAMP),
+                        COALESCE(?, CURRENT_TIMESTAMP))
+                ON CONFLICT(id) DO UPDATE SET
+                    email      = excluded.email,
+                    full_name  = excluded.full_name,
+                    role       = excluded.role,
+                    updated_at = COALESCE(?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    user.id,
+                    user.email,
+                    user.full_name,
+                    str(user.role),
+                    created_at_str,
+                    updated_at_str,
+                    updated_at_str,
+                ),
+            )
+            self._commit()
+        except sqlite3.Error as exc:
+            self._logger.warning(
+                "Failed to cache user %s to SQLite (non-fatal): %s",
+                user.id,
+                exc,
+            )
 

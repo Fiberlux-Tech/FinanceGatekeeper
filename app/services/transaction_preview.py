@@ -12,9 +12,7 @@ Functions ported:
 from __future__ import annotations
 
 import traceback
-from typing import Optional
-
-from app.auth import CurrentUser
+from app.models.user import User
 from app.logger import StructuredLogger
 from app.models.service_models import ServiceResult
 from app.services.base_service import BaseService
@@ -45,7 +43,7 @@ class TransactionPreviewService(BaseService):
     def calculate_preview_metrics(
         self,
         request_data: dict[str, object],
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Calculates all financial metrics based on temporary data from the
@@ -102,7 +100,9 @@ class TransactionPreviewService(BaseService):
             )
 
             # 3. Call the stateless calculator
-            financial_metrics: dict[str, object] = calculate_financial_metrics(full_data_package)
+            financial_metrics: dict[str, object] = calculate_financial_metrics(
+                full_data_package,
+            ).model_dump()
 
             # 4. Clean and return the results
             clean_metrics: dict[str, object] = convert_to_json_safe(financial_metrics)

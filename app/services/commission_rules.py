@@ -2,7 +2,7 @@
 Commission Rules Engine.
 
 Pure-function module containing all hard-coded commission calculation logic
-for each business unit (ESTADO, GIGALAN, CORPORATIVO).
+for each business unit (ESTADO, GIGALAN, CORPORATIVO, MAYORISTA).
 
 All financial values (total_revenue, MRC, etc.) are expected in PEN.
 Functions are stateless: input data -> output result, no side effects.
@@ -10,13 +10,16 @@ Functions are stateless: input data -> output result, no side effects.
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
+from app.logger import StructuredLogger
 from app.models.service_models import CommissionInput
 
 
-def _calculate_estado_commission(data: CommissionInput) -> float:
+def _calculate_estado_commission(
+    data: CommissionInput,
+    logger: Optional[StructuredLogger] = None,
+) -> float:
     """
     Calculate commission for the 'ESTADO' business unit.
 
@@ -42,6 +45,8 @@ def _calculate_estado_commission(data: CommissionInput) -> float:
     # Pago Unico is defined as a contract term of 1 month or less.
     is_pago_unico: bool = plazo <= 1
 
+    _STANDARD_PLAZOS: set[int] = {12, 24, 36, 48}
+
     if is_pago_unico:
         # PAGO UNICO LOGIC
         limit_pen: float = 0.0
@@ -55,6 +60,11 @@ def _calculate_estado_commission(data: CommissionInput) -> float:
             commission_rate, limit_pen = 0.04, 14000
         elif rentabilidad > 0.59:
             commission_rate, limit_pen = 0.05, 15000
+        elif rentabilidad < 0.30 and logger is not None:
+            logger.warning(
+                "ESTADO pago unico: margin %.4f < 0.30 — no commission tier applies",
+                rentabilidad,
+            )
 
         if commission_rate > 0:
             calculated_commission: float = total_revenues * commission_rate
@@ -92,7 +102,20 @@ def _calculate_estado_commission(data: CommissionInput) -> float:
             elif rentabilidad > 0.39 and payback_ok and payback <= 25:
                 commission_rate, limit_mrc_multiplier = 0.03, 1.0
 
-        # All other plazo values (e.g., 60 months) default to 0 commission rate
+        if commission_rate == 0.0 and logger is not None:
+            if plazo not in _STANDARD_PLAZOS and plazo > 1:
+                logger.warning(
+                    "ESTADO recurrent: non-standard plazo %d months "
+                    "(supported: 12, 24, 36, 48) — commission is 0.0",
+                    plazo,
+                )
+            elif rentabilidad < 0.30:
+                logger.warning(
+                    "ESTADO recurrent: margin %.4f < 0.30 for plazo %d "
+                    "— no commission tier applies",
+                    rentabilidad,
+                    plazo,
+                )
 
         if commission_rate > 0.0:
             calculated_commission = total_revenues * commission_rate
@@ -102,7 +125,10 @@ def _calculate_estado_commission(data: CommissionInput) -> float:
     return final_commission_amount
 
 
-def _calculate_gigalan_commission(data: CommissionInput) -> float:
+def _calculate_gigalan_commission(
+    data: CommissionInput,
+    logger: Optional[StructuredLogger] = None,
+) -> float:
     """
     Calculate commission for the 'GIGALAN' business unit.
 
@@ -181,24 +207,68 @@ def _calculate_gigalan_commission(data: CommissionInput) -> float:
     return calculated_commission
 
 
-def _calculate_corporativo_commission(data: CommissionInput) -> float:
+def _calculate_corporativo_commission(
+    data: CommissionInput,
+    logger: Optional[StructuredLogger] = None,
+) -> float:
+    """CORPORATIVO commission: awaiting business rules definition.
+
+    Returns ``0.0`` for all deals until the Finance team provides
+    the rate tables, margin thresholds, and cap structures for the
+    CORPORATIVO business unit.
+
+    Once rules are defined, this function should follow the same
+    pattern as ``_calculate_estado_commission``: tiered rates based
+    on ``gross_margin_ratio`` and ``plazo_contrato``, with caps
+    against either a fixed PEN limit or an MRC multiplier.
+
+    Parameters
+    ----------
+    data:
+        Validated commission input.
+    logger:
+        When provided, emits a warning that rules are pending.
     """
-    Placeholder logic for 'CORPORATIVO' (no full rules defined yet).
+    if logger is not None:
+        logger.warning(
+            "CORPORATIVO commission rules not yet defined — returning 0.0 "
+            "for deal with revenue %.2f PEN, margin %.4f",
+            data.total_revenue,
+            data.gross_margin_ratio,
+        )
+    return 0.0
 
-    Currently caps at 1.2x MRC but always returns 0.0 because
-    the calculated_commission base is 0.
+
+def _calculate_mayorista_commission(
+    data: CommissionInput,
+    logger: Optional[StructuredLogger] = None,
+) -> float:
+    """MAYORISTA commission: awaiting business rules definition.
+
+    Returns ``0.0`` for all deals until the Finance team provides
+    the rate tables, margin thresholds, and cap structures for the
+    MAYORISTA business unit.
+
+    Parameters
+    ----------
+    data:
+        Validated commission input.
+    logger:
+        When provided, emits a warning that rules are pending.
     """
-    mrc_pen: float = data.mrc_pen
-
-    calculated_commission: float = 0
-    limit_mrc_amount: float = 1.2 * mrc_pen
-
-    return min(calculated_commission, limit_mrc_amount)
+    if logger is not None:
+        logger.warning(
+            "MAYORISTA commission rules not yet defined — returning 0.0 "
+            "for deal with revenue %.2f PEN, margin %.4f",
+            data.total_revenue,
+            data.gross_margin_ratio,
+        )
+    return 0.0
 
 
 def calculate_commission(
     data: CommissionInput,
-    logger: Optional[logging.Logger] = None,
+    logger: Optional[StructuredLogger] = None,
 ) -> float:
     """
     Route commission calculation to the appropriate business unit handler.
@@ -208,8 +278,9 @@ def calculate_commission(
     Args:
         data: Validated commission input containing financial metrics and
               business unit identifier.
-        logger: Optional logger instance. When provided, a warning is
-                emitted if the business unit is unrecognized.
+        logger: Optional ``StructuredLogger`` instance. When provided,
+                warnings are emitted for unrecognized business units,
+                low-margin ESTADO deals, and non-standard plazos.
 
     Returns:
         The calculated commission amount in PEN.
@@ -217,11 +288,13 @@ def calculate_commission(
     unit: str = data.unidad_negocio
 
     if unit == 'ESTADO':
-        return _calculate_estado_commission(data)
+        return _calculate_estado_commission(data, logger=logger)
     elif unit == 'GIGALAN':
-        return _calculate_gigalan_commission(data)
+        return _calculate_gigalan_commission(data, logger=logger)
     elif unit == 'CORPORATIVO':
-        return _calculate_corporativo_commission(data)
+        return _calculate_corporativo_commission(data, logger=logger)
+    elif unit == 'MAYORISTA':
+        return _calculate_mayorista_commission(data, logger=logger)
     else:
         if logger is not None:
             logger.warning(

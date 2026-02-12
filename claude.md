@@ -36,6 +36,8 @@ Offline-First Thinking: Always assume the internet is down. Write to SQLite firs
 
 Defensive File Handling: Always wrap file operations in "Steady State" checks. Handle OS-level file locks (PermissionError) gracefully with user-friendly warnings.
 
+Import Hygiene: Before completing any task, verify that every `import` statement in modified files resolves to a real, reachable module or symbol. No empty imports (importing a module that exists but is never used), no ghost imports (importing a name that no longer exists in the target module), and no circular import traps. Run a quick sanity check: if the imported name cannot be found in the target's `__all__` or top-level scope, it is a ghost — remove or fix it immediately.
+
 ## 3. Implementation Workflow
 
 Conceptual Review: Discuss the architectural impact of a change before writing code.
@@ -45,6 +47,8 @@ Schema Validation: Ensure any data movement follows a Pydantic model.
 Atomic Transactions: Use the Command pattern for multi-step processes (Hash -> Rename -> Encrypt -> Move).
 
 Absolute Imports: Always use absolute paths (e.g., from app.logic.engine import calc).
+
+Log Inconsistencies: If, while working on any task, you discover a codebase inconsistency — mismatched types, broken imports, dead code paths, schema drift, naming violations, or anything that contradicts the standards in this document — add a descriptive entry to `TODO.md` immediately, even if fixing it is out of scope for the current task. The TODO entry must include the file path, line number(s), and a clear description of the inconsistency.
 
 ## 4. Refactoring Mandate (Legacy to OS)
 
@@ -80,11 +84,11 @@ Why This Matters: This is the only way to perform professional-grade NPV and IRR
 
 ## 7. Identity Strategy (Email-as-Primary-Key)
 
-The user's Email Address is the Username. Email is the unique identifier in Supabase Auth, and we mirror this in our `profiles` table to eliminate "handle" confusion and reduce identity collisions in the Audit Trail.
+The user's Email Address is the Username. Email is the unique identifier in Supabase Auth, and we mirror this in our `profiles` table to eliminate "handle" confusion and reduce identity collisions in the Audit Trail. Email is used solely for login — no format validation beyond Supabase Auth's own checks.
 
-Display Name: We still capture Full Name so the UI cards and logs feel human and professional.
+Display Name: We capture First Name and Last Name at registration, concatenate them into `full_name`, and store only `full_name` in the profiles table. The UI cards and logs use this display name.
 
-Business Unit Authorization: The profiles table tracks which BUs (GIGALAN, ESTADO, CORPORATIVO, MAYORISTA) each user is authorized to see.
+Business Unit: Business unit is NOT a user attribute. It is a per-transaction field extracted from a cell within the Excel file at ingestion time. Users are not restricted to specific BUs.
 
 ## 8. Phased Table Creation Strategy
 
@@ -98,7 +102,36 @@ Creation Process (Two-Step):
 1. SQL Migration Script: A clean `.sql` file defining tables, foreign keys, and Row Level Security (RLS), executed in the Supabase SQL Editor.
 2. Local Sync Schema: The Python app's Initialization Service checks if the local `gatekeeper_local.db` exists on first run, and builds the identical table structure for Offline-First operation.
 
-## 9. "Pro Move" Safety Guards
+## 9. SharePoint Folder Structure
+
+The SharePoint document library (``18_PLANTILLAS_GATEKEEPER``) uses a specific directory layout. All folder names are UPPERCASE with underscores.
+
+```
+18_PLANTILLAS_GATEKEEPER/
+  01_INBOX/              ← Flat directory. All incoming Excel files land here regardless of BU.
+  02_ARCHIVE_APPROVED/   ← Approved files, organised by year then BU.
+    2026/
+      CORPORATIVO/
+      ESTADO/
+      GIGALAN/
+      MAYORISTA/
+  03_ARCHIVE_REJECTED/   ← Rejected files, same year/BU structure as approved.
+    2026/
+      CORPORATIVO/
+      ESTADO/
+      GIGALAN/
+      MAYORISTA/
+  04_TEMPLATES/
+  05_LOGS/
+```
+
+Key rules:
+
+- **Inbox is flat**: There are NO business-unit subfolders inside ``01_INBOX``. BU is determined from a cell inside the Excel file during parsing.
+- **Archives are structured**: ``02_ARCHIVE_APPROVED`` and ``03_ARCHIVE_REJECTED`` organise files into ``{year}/{BU}/`` subdirectories. Year folders and BU folders are created on-demand at approval/rejection time.
+- **Folder name casing**: Config defaults in ``AppConfig`` use the exact UPPERCASE names (``01_INBOX``, ``02_ARCHIVE_APPROVED``, ``03_ARCHIVE_REJECTED``).
+
+## 10. "Pro Move" Safety Guards
 
 File Lock Guard: The app checks for OS file handles. You cannot "Approve" a file if Excel still has it open. Prevents "Permission Denied" crashes and data corruption.
 

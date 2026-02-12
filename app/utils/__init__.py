@@ -10,9 +10,7 @@ from app.utils.audit import AuditEvent, log_audit_event
 from app.utils.general import convert_to_json_safe
 from app.utils.math_utils import calculate_irr, calculate_npv
 from app.utils.string_helpers import (
-    denormalize_keys,
     normalize_keys,
-    to_camel_case,
     to_snake_case,
 )
 
@@ -21,9 +19,7 @@ __all__ = [
     "calculate_irr",
     "calculate_npv",
     "convert_to_json_safe",
-    "denormalize_keys",
     "log_audit_event",
     "normalize_keys",
-    "to_camel_case",
     "to_snake_case",
 ]

@@ -16,7 +16,7 @@ class FixedCost(BaseModel):
     """Represents a fixed cost line item in a transaction."""
 
     id: Optional[int] = None
-    transaction_id: Optional[str] = None
+    transaction_id: str
     categoria: Optional[str] = None
     tipo_servicio: Optional[str] = None
     ticket: Optional[str] = None

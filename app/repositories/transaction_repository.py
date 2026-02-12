@@ -9,74 +9,55 @@ Provides aggregation methods for KPI calculations.
 from __future__ import annotations
 
 import json
-from app.logger import StructuredLogger
 import math
-from datetime import datetime, timezone
-from typing import Optional
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from typing import Optional, TypedDict
 
 from app.database import DatabaseManager
+from app.logger import StructuredLogger
 from app.models.enums import ApprovalStatus
 from app.models.transaction import Transaction
 from app.repositories.base_repository import BaseRepository
-from app.utils.string_helpers import normalize_keys, denormalize_keys
+from app.utils.string_helpers import sanitize_postgrest_value
+
+
+class PaginatedTransactions(TypedDict):
+    """Typed return value for paginated transaction queries."""
+
+    items: list[Transaction]
+    total: int
+    pages: int
+    current_page: int
+
+
+class PendingAggregates(TypedDict):
+    """Typed return value for pending transaction aggregates."""
+
+    total_pending_mrc: float
+    pending_count: int
+    total_pending_comisiones: float
 
 
 class TransactionRepository(BaseRepository):
-    """Data access layer for Transaction entities."""
+    """Data access layer for Transaction entities.
+
+    **No ``delete()`` method — by design.**
+
+    Transactions are never hard-deleted.  Each transaction has child rows
+    in ``fixed_costs`` and ``recurring_services`` linked by foreign key,
+    plus an immutable audit trail (CLAUDE.md Section 5).  Hard deletion
+    would violate referential integrity and destroy compliance evidence.
+
+    Instead, use :meth:`soft_delete` to transition a transaction's
+    ``approval_status`` to ``CANCELLED``.  Cancelled transactions remain
+    queryable for audit and reporting but are excluded from active KPIs.
+    """
 
     TABLE = "transactions"
 
     def __init__(self, db: DatabaseManager, logger: StructuredLogger) -> None:
         super().__init__(db, logger)
-        self._ensure_sqlite_table()
-
-    def _ensure_sqlite_table(self) -> None:
-        """Create the local SQLite cache table if it doesn't exist."""
-        self.sqlite.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                id TEXT PRIMARY KEY,
-                unidad_negocio TEXT DEFAULT '',
-                client_name TEXT DEFAULT '',
-                company_id REAL,
-                salesman TEXT DEFAULT '',
-                order_id REAL,
-                tipo_cambio REAL,
-                mrc_original REAL,
-                mrc_currency TEXT DEFAULT 'PEN',
-                mrc_pen REAL,
-                nrc_original REAL,
-                nrc_currency TEXT DEFAULT 'PEN',
-                nrc_pen REAL,
-                van REAL,
-                tir REAL,
-                payback INTEGER,
-                total_revenue REAL,
-                total_expense REAL,
-                comisiones REAL,
-                comisiones_rate REAL,
-                costo_instalacion REAL,
-                costo_instalacion_ratio REAL,
-                gross_margin REAL,
-                gross_margin_ratio REAL,
-                plazo_contrato INTEGER,
-                costo_capital_anual REAL,
-                tasa_carta_fianza REAL,
-                costo_carta_fianza REAL,
-                aplica_carta_fianza INTEGER DEFAULT 0,
-                gigalan_region TEXT,
-                gigalan_sale_type TEXT,
-                gigalan_old_mrc REAL,
-                master_variables_snapshot TEXT,
-                approval_status TEXT DEFAULT 'PENDING',
-                submission_date TIMESTAMP,
-                approval_date TIMESTAMP,
-                rejection_note TEXT,
-                financial_cache TEXT
-            )
-            """
-        )
-        self.sqlite.commit()
 
     def get_by_id(self, transaction_id: str) -> Optional[Transaction]:
         """Fetch a transaction by ID. Tries Supabase first, falls back to SQLite."""
@@ -95,11 +76,17 @@ class TransactionRepository(BaseRepository):
                 "Supabase unavailable for transaction lookup: %s", exc
             )
 
-        row = self.sqlite.execute(
-            f"SELECT * FROM {self.TABLE} WHERE id = ?", (transaction_id,)
-        ).fetchone()
-        if row:
-            return self._parse_sqlite_transaction(dict(row))
+        try:
+            row = self.sqlite.execute(
+                f"SELECT * FROM {self.TABLE} WHERE id = ?", (transaction_id,)
+            ).fetchone()
+            if row:
+                return self._parse_sqlite_transaction(dict(row))
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_by_id (transactions): %s",
+                sqlite_exc,
+            )
         return None
 
     def get_paginated(
@@ -110,7 +97,7 @@ class TransactionRepository(BaseRepository):
         search: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-    ) -> dict[str, object]:
+    ) -> PaginatedTransactions:
         """
         Fetch paginated transactions with optional filters.
 
@@ -131,11 +118,12 @@ class TransactionRepository(BaseRepository):
                 count_q = count_q.lte("submission_date", end_date.isoformat())
                 data_q = data_q.lte("submission_date", end_date.isoformat())
             if search:
+                safe_search = sanitize_postgrest_value(search)
                 or_filter = (
-                    f"client_name.ilike.%{search}%,"
-                    f"salesman.ilike.%{search}%,"
-                    f"id.ilike.%{search}%,"
-                    f"unidad_negocio.ilike.%{search}%"
+                    f"client_name.ilike.%{safe_search}%,"
+                    f"salesman.ilike.%{safe_search}%,"
+                    f"id.ilike.%{safe_search}%,"
+                    f"unidad_negocio.ilike.%{safe_search}%"
                 )
                 count_q = count_q.or_(or_filter)
                 data_q = data_q.or_(or_filter)
@@ -169,9 +157,21 @@ class TransactionRepository(BaseRepository):
             )
 
         # SQLite fallback
-        return self._get_paginated_sqlite(
-            page, per_page, salesman_filter, search, start_date, end_date
-        )
+        try:
+            return self._get_paginated_sqlite(
+                page, per_page, salesman_filter, search, start_date, end_date
+            )
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for paginated transactions: %s",
+                sqlite_exc,
+            )
+            return {
+                "items": [],
+                "total": 0,
+                "pages": 1,
+                "current_page": page,
+            }
 
     def create(self, transaction: Transaction) -> Transaction:
         """Insert a new transaction. Writes to Supabase and caches to SQLite."""
@@ -248,21 +248,95 @@ class TransactionRepository(BaseRepository):
             self._logger.error(
                 "Failed to update transaction status in Supabase: %s", exc
             )
-            # SQLite fallback
-            sets = ", ".join(f"{k} = ?" for k in update_data)
-            vals = list(update_data.values()) + [transaction_id]
+            # SQLite fallback — hardcoded allowlist (H-2 fix)
+            _STATUS_UPDATE_COLUMNS = frozenset({
+                "approval_status", "approval_date", "rejection_note",
+            })
+            safe_data = {
+                k: v for k, v in update_data.items()
+                if k in _STATUS_UPDATE_COLUMNS
+            }
+            if not safe_data:
+                self._logger.error(
+                    "update_status called with no valid columns for "
+                    "transaction %s — nothing to update.",
+                    transaction_id,
+                )
+                return self.get_by_id(transaction_id)
+            sets = ", ".join(f"{k} = ?" for k in safe_data)
+            vals = list(safe_data.values()) + [transaction_id]
             self.sqlite.execute(
                 f"UPDATE {self.TABLE} SET {sets} WHERE id = ?", vals
             )
-            self.sqlite.commit()
+            self._commit()
             self._queue_pending_sync("update_status", transaction_id, update_data)
 
         return self.get_by_id(transaction_id)
 
+    def soft_delete(self, transaction_id: str) -> bool:
+        """Cancel a transaction (soft-delete via status transition).
+
+        Transitions the transaction's ``approval_status`` to ``CANCELLED``.
+        Hard deletion is intentionally forbidden — transactions have child
+        detail rows (``fixed_costs``, ``recurring_services``) and immutable
+        audit trails (CLAUDE.md Section 5).
+
+        Only transactions in ``PENDING`` or ``REJECTED`` status can be
+        cancelled.  Approved transactions represent committed financial
+        records and must not be cancelled without a separate reversal
+        workflow.
+
+        Args:
+            transaction_id: The UUID of the transaction to cancel.
+
+        Returns:
+            ``True`` if the transaction was successfully cancelled (or was
+            already cancelled), ``False`` if the transaction does not exist
+            or is in a non-cancellable state (``APPROVED``).
+        """
+        existing = self.get_by_id(transaction_id)
+        if existing is None:
+            self._logger.warning(
+                "Cannot soft-delete transaction %s: not found.",
+                transaction_id,
+            )
+            return False
+
+        if existing.approval_status == ApprovalStatus.CANCELLED:
+            self._logger.info(
+                "Transaction %s is already cancelled — no-op.",
+                transaction_id,
+            )
+            return True
+
+        if existing.approval_status == ApprovalStatus.APPROVED:
+            self._logger.warning(
+                "Cannot soft-delete transaction %s: APPROVED transactions "
+                "require a formal reversal workflow, not cancellation.",
+                transaction_id,
+            )
+            return False
+
+        result = self.update_status(
+            transaction_id, ApprovalStatus.CANCELLED,
+        )
+        if result is not None and result.approval_status == ApprovalStatus.CANCELLED:
+            self._logger.info(
+                "Transaction soft-deleted (CANCELLED): %s", transaction_id,
+            )
+            return True
+
+        self._logger.error(
+            "Soft-delete may have failed for transaction %s — status "
+            "update did not confirm CANCELLED state.",
+            transaction_id,
+        )
+        return False
+
     def get_pending_aggregates(
         self,
         salesman_filter: Optional[str] = None,
-    ) -> dict[str, object]:
+    ) -> PendingAggregates:
         """
         Get aggregated KPI data for pending transactions.
 
@@ -284,9 +358,8 @@ class TransactionRepository(BaseRepository):
             count = len(response.data)
 
             for row in response.data:
-                normalized = normalize_keys(row)
-                mrc = normalized.get("mrc_pen")
-                com = normalized.get("comisiones")
+                mrc = row.get("mrc_pen")
+                com = row.get("comisiones")
                 if mrc is not None:
                     total_mrc += float(mrc)
                 if com is not None:
@@ -304,29 +377,35 @@ class TransactionRepository(BaseRepository):
             )
 
         # SQLite fallback
-        sql = f"""
-            SELECT
-                COALESCE(SUM(mrc_pen), 0) AS total_pending_mrc,
-                COUNT(*) AS pending_count,
-                COALESCE(SUM(comisiones), 0) AS total_pending_comisiones
-            FROM {self.TABLE}
-            WHERE approval_status = ?
-        """
-        params: list[str] = [str(ApprovalStatus.PENDING)]
-        if salesman_filter:
-            sql += " AND salesman = ?"
-            params.append(salesman_filter)
+        try:
+            sql = f"""
+                SELECT
+                    COALESCE(SUM(mrc_pen), 0) AS total_pending_mrc,
+                    COUNT(*) AS pending_count,
+                    COALESCE(SUM(comisiones), 0) AS total_pending_comisiones
+                FROM {self.TABLE}
+                WHERE approval_status = ?
+            """
+            params: list[str] = [str(ApprovalStatus.PENDING)]
+            if salesman_filter:
+                sql += " AND salesman = ?"
+                params.append(salesman_filter)
 
-        row = self.sqlite.execute(sql, params).fetchone()
-        if row:
-            row_dict = dict(row)
-            return {
-                "total_pending_mrc": float(row_dict.get("total_pending_mrc", 0)),
-                "pending_count": int(row_dict.get("pending_count", 0)),
-                "total_pending_comisiones": float(
-                    row_dict.get("total_pending_comisiones", 0)
-                ),
-            }
+            row = self.sqlite.execute(sql, params).fetchone()
+            if row:
+                row_dict = dict(row)
+                return {
+                    "total_pending_mrc": float(row_dict.get("total_pending_mrc", 0)),
+                    "pending_count": int(row_dict.get("pending_count", 0)),
+                    "total_pending_comisiones": float(
+                        row_dict.get("total_pending_comisiones", 0)
+                    ),
+                }
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_pending_aggregates (transactions): %s",
+                sqlite_exc,
+            )
         return {
             "total_pending_mrc": 0.0,
             "pending_count": 0,
@@ -350,7 +429,6 @@ class TransactionRepository(BaseRepository):
             if status:
                 query = query.eq("approval_status", status)
             if months_back:
-                from datetime import timedelta
                 cutoff = (
                     datetime.now(timezone.utc) - timedelta(days=months_back * 30)
                 ).isoformat()
@@ -359,9 +437,9 @@ class TransactionRepository(BaseRepository):
             response = query.execute()
 
             margins = [
-                float(normalize_keys(row).get("gross_margin_ratio", 0))
+                float(row.get("gross_margin_ratio", 0))
                 for row in response.data
-                if normalize_keys(row).get("gross_margin_ratio") is not None
+                if row.get("gross_margin_ratio") is not None
             ]
 
             return sum(margins) / len(margins) if margins else 0.0
@@ -372,46 +450,50 @@ class TransactionRepository(BaseRepository):
             )
 
         # SQLite fallback
-        sql = f"""
-            SELECT AVG(gross_margin_ratio) AS avg_margin
-            FROM {self.TABLE}
-            WHERE gross_margin_ratio IS NOT NULL
-        """
-        params: list[str] = []
-        if salesman_filter:
-            sql += " AND salesman = ?"
-            params.append(salesman_filter)
-        if status:
-            sql += " AND approval_status = ?"
-            params.append(status)
-        if months_back:
-            from datetime import timedelta
-            cutoff = (
-                datetime.now(timezone.utc) - timedelta(days=months_back * 30)
-            ).isoformat()
-            sql += " AND submission_date >= ?"
-            params.append(cutoff)
+        try:
+            sql = f"""
+                SELECT AVG(gross_margin_ratio) AS avg_margin
+                FROM {self.TABLE}
+                WHERE gross_margin_ratio IS NOT NULL
+            """
+            params: list[str] = []
+            if salesman_filter:
+                sql += " AND salesman = ?"
+                params.append(salesman_filter)
+            if status:
+                sql += " AND approval_status = ?"
+                params.append(status)
+            if months_back:
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(days=months_back * 30)
+                ).isoformat()
+                sql += " AND submission_date >= ?"
+                params.append(cutoff)
 
-        row = self.sqlite.execute(sql, params).fetchone()
-        if row:
-            avg = dict(row).get("avg_margin")
-            return float(avg) if avg is not None else 0.0
+            row = self.sqlite.execute(sql, params).fetchone()
+            if row:
+                avg = dict(row).get("avg_margin")
+                return float(avg) if avg is not None else 0.0
+        except sqlite3.Error as sqlite_exc:
+            self._logger.error(
+                "SQLite fallback also failed for get_average_margin (transactions): %s",
+                sqlite_exc,
+            )
         return 0.0
 
     # --- Private helpers ---
 
     def _parse_transaction(self, data: dict[str, object]) -> Transaction:
         """Parse a Supabase row into a Transaction model."""
-        normalized = normalize_keys(data)
         # Parse JSON fields stored as strings
         for json_field in ("master_variables_snapshot", "financial_cache"):
-            val = normalized.get(json_field)
+            val = data.get(json_field)
             if isinstance(val, str):
                 try:
-                    normalized[json_field] = json.loads(val)
+                    data[json_field] = json.loads(val)
                 except (json.JSONDecodeError, ValueError):
-                    normalized[json_field] = None
-        return Transaction(**normalized)
+                    data[json_field] = None
+        return Transaction(**data)
 
     def _parse_sqlite_transaction(self, row: dict[str, object]) -> Transaction:
         """Parse a SQLite row into a Transaction model."""
@@ -452,7 +534,51 @@ class TransactionRepository(BaseRepository):
             val = data.get(enum_field)
             if val is not None:
                 data[enum_field] = str(val)
-        return denormalize_keys(data)
+        return data
+
+    # Hardcoded column allowlist for SQLite cache (H-2 fix).
+    # Must match the Transaction model fields (excluding relationships).
+    _SQLITE_COLUMNS: tuple[str, ...] = (
+        "id",
+        "unidad_negocio",
+        "client_name",
+        "company_id",
+        "salesman",
+        "order_id",
+        "tipo_cambio",
+        "mrc_original",
+        "mrc_currency",
+        "mrc_pen",
+        "nrc_original",
+        "nrc_currency",
+        "nrc_pen",
+        "van",
+        "tir",
+        "payback",
+        "total_revenue",
+        "total_expense",
+        "comisiones",
+        "comisiones_rate",
+        "costo_instalacion",
+        "costo_instalacion_ratio",
+        "gross_margin",
+        "gross_margin_ratio",
+        "plazo_contrato",
+        "costo_capital_anual",
+        "tasa_carta_fianza",
+        "costo_carta_fianza",
+        "aplica_carta_fianza",
+        "gigalan_region",
+        "gigalan_sale_type",
+        "gigalan_old_mrc",
+        "file_sha256",
+        "master_variables_snapshot",
+        "approval_status",
+        "submission_date",
+        "approval_date",
+        "rejection_note",
+        "financial_cache",
+    )
 
     def _cache_to_sqlite(self, transaction: Transaction) -> None:
         """Write transaction to local SQLite cache."""
@@ -473,19 +599,24 @@ class TransactionRepository(BaseRepository):
             if val is not None:
                 data[enum_field] = str(val)
 
-        columns = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        updates = ", ".join(f"{k} = excluded.{k}" for k in data if k != "id")
+        # Use hardcoded allowlist — only known columns enter the SQL statement
+        columns_sql = ", ".join(self._SQLITE_COLUMNS)
+        placeholders = ", ".join("?" for _ in self._SQLITE_COLUMNS)
+        updates = ", ".join(
+            f"{col} = excluded.{col}"
+            for col in self._SQLITE_COLUMNS if col != "id"
+        )
+        values = [data.get(col) for col in self._SQLITE_COLUMNS]
 
         self.sqlite.execute(
             f"""
-            INSERT INTO {self.TABLE} ({columns})
+            INSERT INTO {self.TABLE} ({columns_sql})
             VALUES ({placeholders})
             ON CONFLICT(id) DO UPDATE SET {updates}
             """,
-            list(data.values()),
+            values,
         )
-        self.sqlite.commit()
+        self._commit()
 
     def _get_paginated_sqlite(
         self,
@@ -495,7 +626,7 @@ class TransactionRepository(BaseRepository):
         search: Optional[str],
         start_date: Optional[datetime],
         end_date: Optional[datetime],
-    ) -> dict[str, object]:
+    ) -> PaginatedTransactions:
         """SQLite fallback for paginated queries."""
         where_clauses: list[str] = []
         params: list[object] = []
@@ -510,10 +641,14 @@ class TransactionRepository(BaseRepository):
             where_clauses.append("submission_date <= ?")
             params.append(end_date.isoformat())
         if search:
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             where_clauses.append(
-                "(client_name LIKE ? OR salesman LIKE ? OR id LIKE ? OR unidad_negocio LIKE ?)"
+                "(client_name LIKE ? ESCAPE '\\' "
+                "OR salesman LIKE ? ESCAPE '\\' "
+                "OR id LIKE ? ESCAPE '\\' "
+                "OR unidad_negocio LIKE ? ESCAPE '\\')"
             )
-            pattern = f"%{search}%"
+            pattern = f"%{escaped}%"
             params.extend([pattern, pattern, pattern, pattern])
 
         where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""

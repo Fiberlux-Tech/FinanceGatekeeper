@@ -12,10 +12,13 @@ raw strings or exception side-channels.
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
-from typing import Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel
+from app.models.enums import UserRole
+
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -55,8 +58,8 @@ SUPABASE_ERROR_MAP: dict[str, tuple[AuthErrorCode, str]] = {
         "Incorrect email or password.",
     ),
     "user_not_found": (
-        AuthErrorCode.USER_NOT_FOUND,
-        "No account found for this email.",
+        AuthErrorCode.INVALID_CREDENTIALS,
+        "Incorrect email or password.",
     ),
     "user_banned": (
         AuthErrorCode.USER_BANNED,
@@ -86,6 +89,8 @@ class ValidationResult(BaseModel):
 
     is_valid: bool
     error_message: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 # ---------------------------------------------------------------------------
@@ -127,5 +132,75 @@ class AuthResult(BaseModel):
     user_id: Optional[str] = None
     email: Optional[str] = None
     full_name: Optional[str] = None
-    role: Optional[Literal["SALES", "FINANCE", "ADMIN"]] = None
+    role: Optional[UserRole] = None
     is_offline_login: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit models
+# ---------------------------------------------------------------------------
+
+class RateLimitState(BaseModel):
+    """Per-user rate-limit counters.
+
+    Validated model replacing raw ``dict[str, object]`` for JSON
+    round-trips of rate-limit state (CLAUDE.md S2 -- Schema Validation).
+    """
+
+    failed_attempts: int = 0
+    lockout_until: Optional[datetime] = None
+
+
+class RateLimitStore(BaseModel):
+    """Container for all per-user rate-limit entries.
+
+    Serialized to/from ``app_settings`` as a single JSON blob keyed
+    by normalized email address.
+    """
+
+    entries: dict[str, RateLimitState] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Offline session cache model
+# ---------------------------------------------------------------------------
+
+class CachedSession(BaseModel):
+    """Represents a decrypted offline session payload.
+
+    Previously lived in ``app.services.session_cache``; moved here so
+    that all auth-related data models reside in the models layer.
+
+    Attributes
+    ----------
+    user_id:
+        The Supabase UUID of the authenticated user.
+    email:
+        The user's email address.
+    full_name:
+        The user's full name for display in UI and logs.
+    role:
+        The application role (e.g. ``ADMIN``, ``FINANCE``, ``SALES``).
+    refresh_token:
+        The Supabase refresh token used to obtain new access tokens.
+    cached_at:
+        ISO-8601 UTC timestamp indicating when the session was cached.
+    password_hash:
+        Hex-encoded PBKDF2-HMAC-SHA256 hash for offline password
+        verification.  ``None`` when offline login is disabled.
+    password_salt:
+        Hex-encoded random 32-byte salt paired with *password_hash*.
+    """
+
+    user_id: str
+    email: str
+    full_name: str
+    role: UserRole
+    refresh_token: str
+    cached_at: str  # ISO-8601 UTC
+    password_hash: Optional[str] = None
+    password_salt: Optional[str] = None
+
+    model_config = {"from_attributes": True}

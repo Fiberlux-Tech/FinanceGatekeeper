@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from datetime import datetime
 from typing import Callable, Optional
 
 import customtkinter as ctk
@@ -28,14 +29,21 @@ from app.ui.theme import (
     CORNER_RADIUS,
     ERROR_TEXT,
     FONT_BODY,
+    FONT_BRAND,
     FONT_BUTTON,
+    FONT_CAPTION,
+    FONT_ICON_LG,
+    FONT_LABEL,
     FONT_SMALL,
+    FONT_SUBTITLE,
     INPUT_BG,
     INPUT_BORDER,
     PADDING_LG,
     PADDING_MD,
     PADDING_SM,
     SUCCESS_TEXT,
+    TAB_BORDER,
+    TAB_HOVER,
     TEXT_LIGHT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -48,7 +56,7 @@ _CARD_WIDTH: int = 420
 _TAB_HEIGHT: int = 42
 _INPUT_HEIGHT: int = 44
 _BUTTON_HEIGHT: int = 48
-_LABEL_FONT: tuple[str, int, str] = ("Segoe UI", 11, "bold")
+_LABEL_FONT: tuple[str, int, str] = FONT_LABEL
 _BRAND_ICON_SIZE: int = 56
 
 
@@ -124,6 +132,9 @@ class LoginView(ctk.CTkFrame):
         self._sign_in_frame: Optional[ctk.CTkFrame] = None
         self._request_frame: Optional[ctk.CTkFrame] = None
 
+        # Guard against double-submission on rapid clicks
+        self._login_in_progress: bool = False
+
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -149,7 +160,7 @@ class LoginView(ctk.CTkFrame):
             fg_color=CONTENT_CARD_BG,
             corner_radius=16,
             border_width=1,
-            border_color="#e0e0e0",
+            border_color=TAB_BORDER,
         )
         self._card.grid(row=1, column=0, pady=(0, PADDING_SM))
 
@@ -170,7 +181,7 @@ class LoginView(ctk.CTkFrame):
         ctk.CTkLabel(
             icon_frame,
             text="\u2713",
-            font=("Segoe UI", 24, "bold"),
+            font=FONT_ICON_LG,
             text_color=TEXT_LIGHT,
         ).place(relx=0.5, rely=0.5, anchor="center")
 
@@ -178,7 +189,7 @@ class LoginView(ctk.CTkFrame):
         ctk.CTkLabel(
             inner,
             text="Fiberlux Finanzas",
-            font=("Segoe UI", 22, "bold"),
+            font=FONT_BRAND,
             text_color=TEXT_PRIMARY,
         ).pack(pady=(0, 2))
 
@@ -186,7 +197,7 @@ class LoginView(ctk.CTkFrame):
         ctk.CTkLabel(
             inner,
             text="Secure Operation Gatekeeper",
-            font=("Segoe UI", 12),
+            font=FONT_SUBTITLE,
             text_color=TEXT_SECONDARY,
         ).pack(pady=(0, PADDING_LG))
 
@@ -200,9 +211,9 @@ class LoginView(ctk.CTkFrame):
         self._sign_in_tab = ctk.CTkButton(
             tab_bar,
             text="Sign In",
-            font=("Segoe UI", 13, "bold"),
+            font=FONT_BUTTON,
             fg_color="transparent",
-            hover_color="#f0f0f0",
+            hover_color=TAB_HOVER,
             text_color=ACCENT_PRIMARY,
             height=_TAB_HEIGHT,
             corner_radius=0,
@@ -215,9 +226,9 @@ class LoginView(ctk.CTkFrame):
         self._request_tab = ctk.CTkButton(
             tab_bar,
             text="Request Access",
-            font=("Segoe UI", 13),
+            font=FONT_BODY,
             fg_color="transparent",
-            hover_color="#f0f0f0",
+            hover_color=TAB_HOVER,
             text_color=TEXT_SECONDARY,
             height=_TAB_HEIGHT,
             corner_radius=0,
@@ -249,8 +260,8 @@ class LoginView(ctk.CTkFrame):
         # -- Copyright --
         ctk.CTkLabel(
             self,
-            text="\u00A9 2025 Fiberlux Finanzas. All rights reserved.",
-            font=("Segoe UI", 10),
+            text=f"\u00A9 {datetime.now().year} Fiberlux Finanzas. All rights reserved.",
+            font=FONT_CAPTION,
             text_color=TEXT_SECONDARY,
         ).grid(row=2, column=0, pady=(PADDING_SM, 0))
 
@@ -337,9 +348,9 @@ class LoginView(ctk.CTkFrame):
         ctk.CTkButton(
             parent,
             text="Forgot Password?",
-            font=("Segoe UI", 11),
+            font=FONT_SMALL,
             fg_color="transparent",
-            hover_color="#f0f0f0",
+            hover_color=TAB_HOVER,
             text_color=ACCENT_PRIMARY,
             height=28,
             corner_radius=CORNER_RADIUS,
@@ -533,9 +544,36 @@ class LoginView(ctk.CTkFrame):
         ctk.CTkLabel(
             parent,
             text="Your registration will be audited by the admin team.",
-            font=("Segoe UI", 10),
+            font=FONT_CAPTION,
             text_color=TEXT_SECONDARY,
         ).pack(pady=(PADDING_SM, 0))
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def show_message(self, message: str, *, is_error: bool = True) -> None:
+        """Display a message on the sign-in tab.
+
+        This is the public interface for external callers (e.g. AppShell)
+        that need to show feedback on the login screen.  Internal UI
+        helpers remain private.
+
+        Parameters
+        ----------
+        message:
+            The text to display.
+        is_error:
+            When ``True`` (default), the message is styled as an error
+            (red text).  When ``False``, it is styled as informational.
+        """
+        if is_error:
+            self._show_error(message)
+        else:
+            # For non-error messages, reuse the error label with different color
+            if self._error_label is not None:
+                self._error_label.configure(text=message, text_color=TEXT_SECONDARY)
+                self._error_label.pack(fill="x")
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -557,13 +595,13 @@ class LoginView(ctk.CTkFrame):
                 text_color=ACCENT_PRIMARY,
                 border_color=ACCENT_PRIMARY,
                 border_width=2,
-                font=("Segoe UI", 13, "bold"),
+                font=FONT_BUTTON,
             )
             self._request_tab.configure(
                 text_color=TEXT_SECONDARY,
                 border_color=INPUT_BORDER,
                 border_width=1,
-                font=("Segoe UI", 13),
+                font=FONT_BODY,
             )
         else:
             self._sign_in_frame.pack_forget()
@@ -572,13 +610,13 @@ class LoginView(ctk.CTkFrame):
                 text_color=ACCENT_PRIMARY,
                 border_color=ACCENT_PRIMARY,
                 border_width=2,
-                font=("Segoe UI", 13, "bold"),
+                font=FONT_BUTTON,
             )
             self._sign_in_tab.configure(
                 text_color=TEXT_SECONDARY,
                 border_color=INPUT_BORDER,
                 border_width=1,
-                font=("Segoe UI", 13),
+                font=FONT_BODY,
             )
 
     # ------------------------------------------------------------------
@@ -591,15 +629,20 @@ class LoginView(ctk.CTkFrame):
 
     def _handle_login(self) -> None:
         """Gather inputs, check rate limit, start background auth."""
+        if self._login_in_progress:
+            return
+
         email = self._email_entry.get().strip()
         password = self._password_entry.get()
+        self._password_entry.delete(0, "end")
 
         if not email or not password:
             self._show_error("Please enter email and password.")
             return
 
         # Check rate limit before starting background thread
-        is_locked, remaining = self._auth_service.check_rate_limit()
+        normalized_email = self._auth_service.normalize_email(email)
+        is_locked, remaining = self._auth_service.check_rate_limit(normalized_email)
         if is_locked:
             self._show_error(
                 f"Too many failed attempts. Please wait {remaining} seconds."
@@ -607,6 +650,7 @@ class LoginView(ctk.CTkFrame):
             self._start_countdown(remaining)
             return
 
+        self._login_in_progress = True
         self._set_loading(True)
         self._clear_error()
 
@@ -631,7 +675,8 @@ class LoginView(ctk.CTkFrame):
                 def show_login_result() -> None:
                     self._show_error(result.error_message or "Login failed.")
                     if result.error_code == AuthErrorCode.RATE_LIMITED:
-                        _, remaining = self._auth_service.check_rate_limit()
+                        normalized = self._auth_service.normalize_email(email)
+                        _, remaining = self._auth_service.check_rate_limit(normalized)
                         self._start_countdown(remaining)
                 self.after(0, show_login_result)
         except Exception as exc:
@@ -641,7 +686,11 @@ class LoginView(ctk.CTkFrame):
                 lambda msg=error_msg: self._show_error(f"Login failed: {msg}"),
             )
         finally:
-            self.after(0, lambda: self._set_loading(False))
+            def _reset_login_state() -> None:
+                self._login_in_progress = False
+                self._set_loading(False)
+            if self.winfo_exists():
+                self.after(0, _reset_login_state)
 
     # ------------------------------------------------------------------
     # Event Handlers — Request Access (Registration)
@@ -735,19 +784,33 @@ class LoginView(ctk.CTkFrame):
         self._forgot_button.configure(text="Sending...", state="disabled")
 
         def do_reset() -> None:
-            result = self._auth_service.request_password_reset(email)
+            try:
+                result = self._auth_service.request_password_reset(email)
 
-            def show_reset_result() -> None:
-                color = SUCCESS_TEXT if result.success else ERROR_TEXT
-                self._forgot_message_label.configure(
-                    text=result.error_message or "",
-                    text_color=color,
-                )
-                self._forgot_button.configure(
-                    text="Send Reset Link", state="normal",
-                )
+                def show_reset_result() -> None:
+                    color = SUCCESS_TEXT if result.success else ERROR_TEXT
+                    self._forgot_message_label.configure(
+                        text=result.error_message or "",
+                        text_color=color,
+                    )
+                    self._forgot_button.configure(
+                        text="Send Reset Link", state="normal",
+                    )
 
-            self.after(0, show_reset_result)
+                self.after(0, show_reset_result)
+            except Exception as exc:
+                error_msg = str(exc)
+
+                def show_reset_error() -> None:
+                    self._forgot_message_label.configure(
+                        text=f"Password reset failed: {error_msg}",
+                        text_color=ERROR_TEXT,
+                    )
+                    self._forgot_button.configure(
+                        text="Send Reset Link", state="normal",
+                    )
+
+                self.after(0, show_reset_error)
 
         threading.Thread(target=do_reset, daemon=True).start()
 
@@ -818,7 +881,7 @@ class LoginView(ctk.CTkFrame):
         double-submit.  When a countdown is active, the button state
         is managed by ``_start_countdown`` and must not be overridden.
         """
-        if self._login_button is None:
+        if self._login_button is None or not self._login_button.winfo_exists():
             return
         if loading:
             self._login_button.configure(
@@ -836,7 +899,7 @@ class LoginView(ctk.CTkFrame):
 
     def _set_ra_loading(self, loading: bool) -> None:
         """Toggle the Create Account button between normal and loading states."""
-        if self._ra_create_button is None:
+        if self._ra_create_button is None or not self._ra_create_button.winfo_exists():
             return
         if loading:
             self._ra_create_button.configure(
@@ -848,3 +911,10 @@ class LoginView(ctk.CTkFrame):
                 text="Create Account  \u2192",
                 state="normal",
             )
+
+    def destroy(self) -> None:
+        """Cancel pending after() jobs before destroying the widget."""
+        if self._countdown_job is not None:
+            self.after_cancel(self._countdown_job)
+            self._countdown_job = None
+        super().destroy()

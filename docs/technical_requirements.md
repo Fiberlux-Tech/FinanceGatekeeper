@@ -33,7 +33,7 @@ Security: PyCryptodome (Encryption) & Hashlib (SHA-256).
 
 A. The "Observer" Pattern
 
-The application implements a background observer (using watchdog or a timed polling thread) that monitors the local 01_Inbox directory and updates the UI state immediately when files appear or disappear.
+The application implements a background observer (using watchdog or a timed polling thread) that monitors the local 01_INBOX directory and updates the UI state immediately when files appear or disappear. The inbox is a flat directory — all incoming files land here regardless of business unit. BU is determined from a cell within the Excel file during parsing.
 
 B. Offline-First Synchronization (Local Persistence)
 
@@ -79,9 +79,21 @@ Each file card features a "Refresh" action allowing users to modify the Excel fi
 
 G. Command Pattern (Atomic Transactions)
 
-Operations involving multiple steps (Approve/Reject) are encapsulated in Command objects. This ensures atomic execution (Move -> Rename -> Encrypt -> DB Write for header + all detail rows) and provides a clear path for rollbacks.
+Operations involving multiple steps (Approve/Reject) are encapsulated in Command objects. This ensures atomic execution (Hash -> Rename -> Encrypt -> Move to archive/{year}/{BU}/ -> DB Write for header + all detail rows) and provides a clear path for rollbacks.
 
-H. Identity Strategy (Email-as-Primary-Key)
+H. SharePoint Folder Structure
+
+The SharePoint document library (18_PLANTILLAS_GATEKEEPER) uses UPPERCASE folder names:
+
+- 01_INBOX: Flat directory. All incoming Excel files land here regardless of business unit.
+- 02_ARCHIVE_APPROVED/{year}/{BU}/: Approved files organised by year then BusinessUnit. Folders created on-demand.
+- 03_ARCHIVE_REJECTED/{year}/{BU}/: Rejected files, same structure as approved.
+- 04_TEMPLATES: Excel templates.
+- 05_LOGS: Log files.
+
+Business unit is NOT inferred from folder structure. It is extracted from a cell within the Excel file during parsing.
+
+I. Identity Strategy (Email-as-Primary-Key)
 
 Email Address serves as the Username across the system. Since email is the unique identifier in Supabase Auth, we mirror it in the `profiles` table to eliminate handle confusion and prevent identity collisions in the Audit Trail. Full Name is captured separately for display in UI cards and logs.
 

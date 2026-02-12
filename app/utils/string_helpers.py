@@ -17,9 +17,8 @@ from typing import Union, overload
 
 __all__ = [
     "to_snake_case",
-    "to_camel_case",
     "normalize_keys",
-    "denormalize_keys",
+    "sanitize_postgrest_value",
 ]
 
 # ---------------------------------------------------------------------------
@@ -58,10 +57,10 @@ _RE_MULTI_UNDERSCORE = re.compile(r"_+")
 
 
 def to_snake_case(name: str) -> str:
-    """
-    Convert a camelCase, PascalCase, or mixed-case string to snake_case.
+    """Convert a camelCase, PascalCase, or mixed-case string to snake_case.
 
-    Handles edge cases from legacy financial data keys:
+    Handles edge cases from legacy financial data keys::
+
         clientName       -> client_name
         unidadNegocio    -> unidad_negocio
         MRC_original     -> mrc_original
@@ -71,6 +70,19 @@ def to_snake_case(name: str) -> str:
         tipoCambio       -> tipo_cambio
         NRC_pen          -> nrc_pen
         grossMarginRatio -> gross_margin_ratio
+
+    Known limitation — consecutive-uppercase acronyms
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    When an all-uppercase acronym is followed *directly* by a lowercase
+    letter without a clear PascalCase boundary, the regex splits
+    incorrectly.  For example:
+
+    - ``XMLParser``  (correct PascalCase boundary) -> ``xml_parser``
+    - ``XMLproperty`` (no boundary) -> ``xm_lproperty`` (wrong)
+
+    Workaround: always use PascalCase boundaries after acronyms
+    (e.g. ``XMLProperty``, not ``XMLproperty``).  This pattern is rare
+    in the financial data keys processed by this application.
     """
     # Insert underscore between consecutive uppercase and uppercase+lowercase
     s1 = _RE_UPPER_RUN.sub(r"\1_\2", name)
@@ -79,19 +91,6 @@ def to_snake_case(name: str) -> str:
     # Collapse multiple underscores and lowercase everything
     s3 = _RE_MULTI_UNDERSCORE.sub("_", s2)
     return s3.lower()
-
-
-def to_camel_case(name: str) -> str:
-    """
-    Convert a snake_case string to camelCase.
-
-    Preserves common financial acronyms:
-        client_name     -> clientName
-        mrc_original    -> mrcOriginal
-        approval_status -> approvalStatus
-    """
-    components = name.split("_")
-    return components[0] + "".join(x.title() for x in components[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -128,29 +127,34 @@ def normalize_keys(
     return data
 
 
-@overload
-def denormalize_keys(data: dict[str, JsonValue]) -> dict[str, JsonValue]: ...
+# Characters unsafe for PostgREST filter interpolation: commas (OR
+# predicates), periods (operator separators), parentheses (grouping),
+# percent/underscore (SQL wildcards), backslash (ILIKE escape), colon
+# (PostgREST relation/cast syntax).  Allowlist retains only alphanumeric
+# characters, whitespace, hyphens, and accented Latin characters
+# (U+00C0..U+024F — Spanish, Portuguese, French diacritics).
+_POSTGREST_UNSAFE_RE: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9\s\-\u00C0-\u024F]")
 
 
-@overload
-def denormalize_keys(data: list[JsonValue]) -> list[JsonValue]: ...
+def sanitize_postgrest_value(value: str) -> str:
+    """Strip characters unsafe for PostgREST filter interpolation.
 
+    Retains only alphanumeric characters, whitespace, hyphens, and
+    accented Latin characters (U+00C0..U+024F, covering Spanish,
+    Portuguese, and French diacritics common in Peruvian business
+    names).  All other characters — including PostgREST operators
+    (``.``, ``,``, ``(``, ``)``), SQL wildcards (``%``, ``_``), and
+    escape sequences (``\\``, ``:``) — are removed.
 
-@overload
-def denormalize_keys(data: JsonValue) -> JsonValue: ...
+    Parameters
+    ----------
+    value:
+        The raw user-supplied search string.
 
-
-def denormalize_keys(
-    data: Union[dict[str, JsonValue], list[JsonValue], JsonValue],
-) -> Union[dict[str, JsonValue], list[JsonValue], JsonValue]:
+    Returns
+    -------
+    str
+        A sanitized string safe for interpolation into PostgREST
+        ``ilike`` filter expressions.
     """
-    Recursively convert all dictionary keys to camelCase.
-
-    Used at the Repository/outbound boundary when writing data back
-    to external systems that require camelCase (JSON APIs, Supabase).
-    """
-    if isinstance(data, dict):
-        return {to_camel_case(k): denormalize_keys(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [denormalize_keys(item) for item in data]
-    return data
+    return _POSTGREST_UNSAFE_RE.sub("", value)

@@ -6,85 +6,35 @@ We have moved from a "simple file processor" to a Relational, Offline-First Gate
 
 ---
 
-Phase 1: Identity & Access Foundation (Immediate)
+Phase 1.5: Authentication Pipeline (COMPLETE)
 
-[x] Supabase Auth Integration: Login screen + Session management.
+[x] Auth Service: Login, registration, logout, password reset orchestration via typed AuthResult/ValidationResult models.
 
-[x] JIT Provisioning: Refactor legacy sync logic to map users to roles/modules.
+[x] Session Cache: AES-256-GCM encrypted offline session storage with PBKDF2-HMAC-SHA256 key derivation.
 
-[x] The Host Shell: Build the sidebar and "Module Switcher" to allow future expansion.
+[x] JIT Provisioning: Automatic local profile sync on first login.
 
-[x] Local Persistence: Initialize the SQLite schema for the Sync Queue and Audit Logs.
+[x] Rate Limiting: Per-user lockout with HMAC-signed persistence to prevent file-level tampering.
 
-[x] Profiles Table: Create in Supabase (cloud) first, then mirror in local SQLite. Email-as-Username identity strategy with Full Name for display.
+[x] Login UI: Tabbed Sign In / Register / Request Access with real-time validation and lockout countdown.
 
-Phase 1.5: Complete Authentication Pipeline
-
-Phase 1 delivered the skeleton (login UI, session manager, JIT provisioning). Phase 1.5 closes every gap so that a real user can register, log in, recover a password, and log out — end-to-end — before we move on to business features.
-
-1.5.1 — Registration (Request Access)
-
-[x] Wire supabase.auth.sign_up(): Collect first name, last name, email, and password from the Request Access form. Pass full_name (first + last) and default role SALES as user_metadata so the handle_new_user trigger populates the profiles table automatically.
-
-[x] Client-side validation: Email format regex (RFC 5322 simplified). Password policy: minimum 8 characters, at least 1 uppercase, 1 lowercase, 1 digit, 1 special character. Show inline errors per field before submitting.
-
-[x] Post-signup UX: After successful sign_up, show a confirmation message: "Account created. Check your email to verify, then sign in." Switch the user back to the Sign In tab automatically.
-
-[x] Duplicate email handling: Catch AuthError when the email already exists and show "An account with this email already exists. Try signing in."
-
-[x] Loading state: Disable the Create Account button and show "Creating account..." while the request is in flight.
-
-1.5.2 — Login Hardening
-
-[x] Specific error messages: Catch gotrue.errors.AuthApiError and map error codes to human messages: invalid_credentials -> "Incorrect email or password.", user_not_found -> "No account found for this email.", user_banned -> "Your account has been deactivated. Contact your administrator.", email_not_confirmed -> "Please verify your email before signing in."
-
-[x] Network vs auth errors: Distinguish connection failures (ConnectionError, TimeoutError) from authentication failures (AuthApiError). Show "Cannot reach the server. Check your internet connection." for network issues.
-
-[x] Rate-limit guard: After 3 consecutive failed login attempts, disable the Sign In button for 30 seconds with a countdown. Prevents brute-force hammering.
-
-[x] Email normalization: Apply .strip().lower() to email input before any API call. Prevents case-sensitivity mismatches.
-
-1.5.3 — Offline Login Security
-
-[x] Password hash storage: When an online login succeeds, derive a PBKDF2-HMAC-SHA256 hash of the password (with a random salt) and store it alongside the encrypted session cache. On offline login, verify the entered password against this hash before granting access. This closes the shared-computer vulnerability where offline login currently accepts any password for a cached email.
-
-[x] Offline login audit: Log offline login events with a distinct event type (OFFLINE_LOGIN) in the structured logger so they are visible in the audit trail.
-
-1.5.4 — Token Lifecycle
-
-[x] Refresh failure -> forced logout: If token refresh fails with an auth error (refresh token expired or revoked), immediately clear the session and redirect to the login screen with the message "Your session has expired. Please sign in again." Only retry on transient network errors.
-
-[x] Server-side logout: Call supabase.auth.sign_out() in _handle_logout before clearing local state. Wrap in try/except so offline logout still works.
-
-[x] Logout audit event: Log a structured LOGOUT event with user email and timestamp.
-
-1.5.5 — Password Reset
-
-[x] "Forgot Password?" link: Add a clickable label below the Sign In button. When clicked, show an inline email input and a "Send Reset Link" button.
-
-[x] Reset email dispatch: Call supabase.auth.reset_password_for_email(email) and show "If this email is registered, you will receive a password reset link."
-
-[x] UX feedback: Disable the reset button while the request is in flight. Show success/error states.
-
-1.5.6 — Email Confirmation Awareness
-
-[x] Post-signup guard: After sign_up, if Supabase has email confirmation enabled, the user cannot sign in until they click the verification link. Detect the email_not_confirmed error on login and show "Please check your inbox and verify your email before signing in."
-
-[x] Resend confirmation: Add a "Resend verification email" action that calls supabase.auth.resend(type="signup", email=email).
-
-Done Criteria: A brand-new user can open the app, register via Request Access, receive a verification email, confirm, sign in, have their profile provisioned, reset their password if forgotten, log out (server-side revoked), and log in offline with password verification. All error paths show clear, human-readable messages.
+[x] Security Hardening: PBKDF2 iterations raised to 600,000 (OWASP 2023), salt file permissions restricted on POSIX, control character rejection in name fields, offline email mismatch records failed attempts, best-effort password memory clearing.
 
 ---
 
-Phase 2: Observer & Native Interaction
+Phase 2: Observer & Native Interaction (COMPLETE)
 
-[ ] Path Discovery: Implement dynamic resolution of the local SharePoint/OneDrive root.
+[x] Path Discovery: Dynamic resolution of the local SharePoint/OneDrive root via config override, user-stored path (SQLite app_settings), Windows Registry, and %OneDriveCommercial% fallback cascade.
 
-[ ] Watchdog Thread: Set up real-time monitoring of the 01_Inbox directory.
+[x] Path Configuration UI: Post-login inline view prompts users to browse and select their SharePoint folder when auto-detection fails. Persists to SQLite for future sessions. Settings sidebar module for reconfiguration.
 
-[ ] Safety Guards: Implement Steady State check (wait for sync) and File Lock Detection (detect if Excel is open).
+[x] Watchdog Thread: Real-time monitoring of the flat 01_INBOX directory using watchdog on a daemon thread. Detects .xlsx creation, modification, and deletion with typed FileEvent dispatch. All files land in the inbox root — BU is determined from the Excel contents, not folder structure.
 
-[ ] Native Open: Link cards to launch Microsoft Excel directly for manual edits.
+[x] Safety Guards: Steady State check (size-stabilisation polling for OneDrive/Power Automate sync), File Lock Detection (exclusive open test), temp-marker detection (~$file), and SHA-256 chain-of-custody hashing.
+
+[x] Native Open: Launch Excel workbooks and containing folders via os.startfile (Windows) with xdg-open/open fallbacks for other platforms.
+
+---
 
 Phase 3: Parsing & Card UI (The "Filter")
 
@@ -112,20 +62,20 @@ Core Tables:
 
 [ ] Service Layer: Port the Math Engine (NPV/IRR/Commissions) into pure Python services.
 
-[ ] Relational Schema Deployment: Create transactions, fixed_costs, recurring_services, and audit_logs tables in Supabase and SQLite.
+[ ] Relational Schema Deployment: Create transactions, fixed_costs, recurring_services, and audit_logs tables in Supabase and SQLite. IMPORTANT: The Supabase transactions CREATE TABLE must include the `file_sha256 TEXT` column (Chain of Custody, CLAUDE.md §5). The local SQLite schema and Pydantic model already have this field — the cloud migration must match.
 
-[ ] Approval Command: Atomic sequence of Hash -> Rename -> Encrypt -> Move -> Local DB Write (header + all detail rows).
+[ ] Approval Command: Atomic sequence of Hash -> Rename -> Encrypt -> Move to 02_ARCHIVE_APPROVED/{year}/{BU}/ -> Local DB Write (header + all detail rows).
 
-[ ] Rejection Command: Move -> Background Email Notification (Async Thread).
+[ ] Rejection Command: Move to 03_ARCHIVE_REJECTED/{year}/{BU}/ -> Background Email Notification (Async Thread).
 
 [ ] Background Sync Worker: Push local SQLite records (all three tables) to Supabase with retry logic.
 
-Phase 5: Admin, Vault & Audit
+Phase 5: Late-Stage — Dashboard, Audit UI & Auto-Update
 
-[ ] Vault UI: Admin-only view to retrieve file encryption passwords from Supabase.
+These features are deferred to the final development phase. However, the database schema and service layer must be designed to support them from the start — capturing timeline fields (date_received, date_modified, date_processed), writing structured audit logs, and storing version metadata. No UI is built until this phase.
 
-[ ] Timeline Dashboard: View "Date Received" vs. "Date Processed" metrics.
+[ ] Timeline Dashboard: View "Date Received" vs. "Date Processed" metrics across the portfolio.
 
-[ ] Structured Logging: Centralized view of the JSON audit trail.
+[ ] Audit Log Viewer: Centralized UI to browse and filter the structured JSON audit trail.
 
-[ ] Version Control: Check cloud for app updates on startup.
+[ ] Auto-Update Check: Check cloud for app updates on startup and notify the user.

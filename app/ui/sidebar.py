@@ -19,6 +19,8 @@ from app.ui.theme import (
     FONT_SIDEBAR,
     FONT_SIDEBAR_ACTIVE,
     FONT_SMALL,
+    LOGOUT_HOVER,
+    LOGOUT_PRIMARY,
     PADDING_MD,
     PADDING_SM,
     SIDEBAR_ACTIVE,
@@ -30,8 +32,6 @@ from app.ui.theme import (
 )
 
 _AVATAR_SIZE: int = 40
-_LOGOUT_RED: str = "#e74c3c"
-_LOGOUT_RED_HOVER: str = "#3a1a1a"
 
 
 class _ModuleButton(ctk.CTkButton):
@@ -178,7 +178,7 @@ class SidebarNav(ctk.CTkFrame):
         ctk.CTkLabel(
             avatar,
             text=initials,
-            font=("Segoe UI", 14, "bold"),
+            font=FONT_SIDEBAR_ACTIVE,
             text_color=TEXT_LIGHT,
         ).place(relx=0.5, rely=0.5, anchor="center")
 
@@ -223,8 +223,8 @@ class SidebarNav(ctk.CTkFrame):
             text="  \u23FB   Log Out",
             font=FONT_BODY,
             fg_color="transparent",
-            hover_color=_LOGOUT_RED_HOVER,
-            text_color=_LOGOUT_RED,
+            hover_color=LOGOUT_HOVER,
+            text_color=LOGOUT_PRIMARY,
             anchor="w",
             height=36,
             corner_radius=6,

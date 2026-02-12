@@ -5,7 +5,8 @@ Ensures that authenticated users (verified via Supabase JWT) are automatically
 synchronized to the local database via the UserRepository.
 
 Sync strategy:
-    - Always sync metadata on every request (email, full_name, role).
+    - Sync non-privileged metadata on every login (email, full_name).
+    - NEVER sync the ``role`` field from external sources (C-1 fix).
     - Use UUID from JWT 'sub' claim for lookups (indexed).
     - Fail authentication if provisioning fails (strict mode).
 
@@ -41,7 +42,7 @@ class JITProvisioningService(BaseService):
     Service that synchronises Supabase Auth JWT claims to the local user table.
 
     Called on every authenticated request to ensure the local database
-    reflects the latest JWT metadata (email, full_name, role).
+    reflects the latest JWT metadata (email, full_name).
     """
 
     def __init__(
@@ -57,44 +58,30 @@ class JITProvisioningService(BaseService):
         user_id: str,
         email: str,
         full_name: str,
-        role: str,
     ) -> User:
-        """
-        Ensure a user exists in the database and metadata is synchronized.
+        """Ensure a user exists in the database and metadata is synchronised.
 
-        This method is called on EVERY authenticated request to maintain
-        database consistency with Supabase Auth JWT claims.
+        This method is called after every successful authentication to
+        keep the local database in sync with identity metadata.
+
+        **Security (C-1)**: New users are always provisioned with
+        ``SALES``.  Existing users retain whatever role is stored in
+        the ``profiles`` table.  Role escalation is only possible
+        through explicit admin action via the ``service_role`` key.
 
         Args:
-            user_id: Supabase UUID from JWT 'sub' claim.
-            email: Email from JWT 'email' claim.
-            full_name: Full name from JWT 'user_metadata.full_name'.
-            role: Role string from JWT 'user_metadata.role'.
+            user_id: Supabase UUID from JWT ``sub`` claim.
+            email: Email from JWT ``email`` claim.
+            full_name: Full name from JWT ``user_metadata.full_name``.
 
         Returns:
-            The synchronized User model instance.
+            The synchronised User model instance.
 
         Raises:
             JITProvisioningError: If database sync fails.
-
-        Performance:
-            - Best case (no changes): ~5ms (single SELECT by PK)
-            - Worst case (update): ~15ms (SELECT + UPDATE + COMMIT)
-            - First login: ~20ms (INSERT + COMMIT)
         """
-        # Validate the role string against the enum
         try:
-            validated_role: UserRole = UserRole(role)
-        except ValueError:
-            self._logger.warning(
-                "JIT Provisioning: Invalid role '%s' for user %s. Defaulting to SALES.",
-                role,
-                full_name,
-            )
-            validated_role = UserRole.SALES
-
-        try:
-            return self._sync_user(user_id, email, full_name, validated_role)
+            return self._sync_user(user_id, email, full_name)
         except JITProvisioningError:
             raise
         except Exception as exc:
@@ -118,35 +105,37 @@ class JITProvisioningService(BaseService):
         user_id: str,
         email: str,
         full_name: str,
-        role: UserRole,
     ) -> User:
-        """
-        Core synchronisation logic. Separated for clarity.
+        """Core synchronisation logic.
 
         1. Look up user by ID.
-        2. If missing, create via upsert (with race-condition retry).
-        3. If present, detect and apply metadata changes.
+        2. If missing, create via upsert with role=SALES (defence-in-depth).
+        3. If present, sync email/full_name but **never** overwrite role.
         """
         existing_user: Optional[User] = self._repo.get_by_id(user_id)
 
         if existing_user is None:
-            return self._provision_new_user(user_id, email, full_name, role)
+            return self._provision_new_user(user_id, email, full_name)
 
-        return self._sync_existing_user(existing_user, email, full_name, role)
+        return self._sync_existing_user(existing_user, email, full_name)
 
     def _provision_new_user(
         self,
         user_id: str,
         email: str,
         full_name: str,
-        role: UserRole,
     ) -> User:
-        """
-        Create a brand-new user record.
+        """Create a brand-new user record with role=SALES.
+
+        SECURITY (C-1): New users are **always** provisioned with
+        ``UserRole.SALES``, matching the database trigger in
+        ``20250102000000_harden_role_assignment.sql``.  The role
+        parameter is intentionally absent — no external source may
+        influence the initial role.
 
         Handles the race condition where two concurrent requests both
         try to create the same user: if the upsert fails, we retry the
-        lookup. If the retry also returns None, we raise.
+        lookup.  If the retry also returns None, we raise.
         """
         self._logger.info(
             "JIT Provisioning: Creating new user %s (ID: %s)", full_name, user_id,
@@ -156,7 +145,7 @@ class JITProvisioningService(BaseService):
             id=user_id,
             email=email,
             full_name=full_name,
-            role=role,
+            role=UserRole.SALES,
         )
 
         try:
@@ -193,7 +182,7 @@ class JITProvisioningService(BaseService):
             entity_type="User",
             entity_id=user_id,
             user_id=user_id,
-            details={"email": email, "full_name": full_name, "role": str(role)},
+            details={"email": email, "full_name": full_name, "role": str(UserRole.SALES)},
         )
 
         return created_user
@@ -203,19 +192,20 @@ class JITProvisioningService(BaseService):
         user: User,
         email: str,
         full_name: str,
-        role: UserRole,
     ) -> User:
-        """
-        Compare JWT claims against the stored user and apply any differences.
+        """Compare identity metadata and apply non-privileged changes.
 
-        Only performs a write if at least one field has changed.
+        SECURITY (C-1): The ``role`` field is **never** overwritten
+        during JIT sync.  Only ``email`` and ``full_name`` are
+        synchronised from the authentication response.  Role changes
+        must go through the explicit ``UserRepository.update_role()``
+        path (admin-only, guarded by ``service_role`` key).
         """
         changes: list[str] = []
 
         needs_update: bool = False
         updated_email: str = user.email
         updated_full_name: str = user.full_name
-        updated_role: UserRole = user.role
 
         if user.email != email:
             changes.append(f"email: {user.email} -> {email}")
@@ -227,10 +217,9 @@ class JITProvisioningService(BaseService):
             updated_full_name = full_name
             needs_update = True
 
-        if user.role != role:
-            changes.append(f"role: {user.role} -> {role}")
-            updated_role = role
-            needs_update = True
+        # SECURITY (C-1): Role is intentionally NOT compared or synced.
+        # The authoritative role lives in the profiles table and is
+        # managed exclusively via admin operations.
 
         if not needs_update:
             return user
@@ -246,7 +235,7 @@ class JITProvisioningService(BaseService):
             id=user.id,
             email=updated_email,
             full_name=updated_full_name,
-            role=updated_role,
+            role=user.role,  # Preserve DB-authoritative role
         )
 
         try:

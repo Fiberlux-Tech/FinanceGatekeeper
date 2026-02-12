@@ -10,18 +10,21 @@ Refactored from legacy Flask service:
     - Stripped: g.current_user, db.session, func.*, SQLAlchemy ORM
     - Eliminated: _apply_kpi_filters() -- filtering now lives in the repository
     - Injected: TransactionRepository, logging.Logger
-    - All public methods receive CurrentUser explicitly (no implicit globals)
+    - All public methods receive User explicitly (no implicit globals)
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from app.auth import CurrentUser
+from app.models.user import User
 from app.logger import StructuredLogger
 from app.models.enums import UserRole
 from app.models.service_models import ServiceResult
-from app.repositories.transaction_repository import TransactionRepository
+from app.repositories.transaction_repository import (
+    PendingAggregates,
+    TransactionRepository,
+)
 from app.services.base_service import BaseService
 
 
@@ -47,7 +50,7 @@ class KPIService(BaseService):
 
     def _resolve_salesman_filter(
         self,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> Optional[str]:
         """
         Determine whether the current user's queries should be scoped
@@ -71,7 +74,7 @@ class KPIService(BaseService):
 
     def get_kpi_summary(
         self,
-        current_user: CurrentUser,
+        current_user: User,
         months_back: Optional[int] = None,
         status_filter: Optional[str] = None,
     ) -> ServiceResult:
@@ -104,7 +107,7 @@ class KPIService(BaseService):
 
         try:
             # Query 1: Pending aggregates (MRC, count, comisiones)
-            pending_aggs: dict[str, object] = (
+            pending_aggs: PendingAggregates = (
                 self._repo.get_pending_aggregates(
                     salesman_filter=salesman_filter,
                 )
@@ -120,15 +123,11 @@ class KPIService(BaseService):
             return ServiceResult(
                 success=True,
                 data={
-                    "total_pending_mrc": float(
-                        pending_aggs.get("total_pending_mrc", 0.0),
-                    ),
-                    "pending_count": int(
-                        pending_aggs.get("pending_count", 0),
-                    ),
-                    "total_pending_comisiones": float(
-                        pending_aggs.get("total_pending_comisiones", 0.0),
-                    ),
+                    "total_pending_mrc": pending_aggs["total_pending_mrc"],
+                    "pending_count": pending_aggs["pending_count"],
+                    "total_pending_comisiones": pending_aggs[
+                        "total_pending_comisiones"
+                    ],
                     "average_gross_margin_ratio": avg_margin,
                 },
             )
@@ -148,7 +147,7 @@ class KPIService(BaseService):
 
     def get_pending_mrc_sum(
         self,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Sum of MRC (Monthly Recurring Charge) for pending transactions.
@@ -166,7 +165,7 @@ class KPIService(BaseService):
         )
 
         try:
-            pending_aggs: dict[str, object] = (
+            pending_aggs: PendingAggregates = (
                 self._repo.get_pending_aggregates(
                     salesman_filter=salesman_filter,
                 )
@@ -174,9 +173,7 @@ class KPIService(BaseService):
             return ServiceResult(
                 success=True,
                 data={
-                    "total_pending_mrc": float(
-                        pending_aggs.get("total_pending_mrc", 0.0),
-                    ),
+                    "total_pending_mrc": pending_aggs["total_pending_mrc"],
                     "user_role": current_user.role,
                     "full_name": current_user.full_name,
                 },
@@ -193,7 +190,7 @@ class KPIService(BaseService):
 
     def get_pending_transaction_count(
         self,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Count of pending transactions.
@@ -211,7 +208,7 @@ class KPIService(BaseService):
         )
 
         try:
-            pending_aggs: dict[str, object] = (
+            pending_aggs: PendingAggregates = (
                 self._repo.get_pending_aggregates(
                     salesman_filter=salesman_filter,
                 )
@@ -219,9 +216,7 @@ class KPIService(BaseService):
             return ServiceResult(
                 success=True,
                 data={
-                    "pending_count": int(
-                        pending_aggs.get("pending_count", 0),
-                    ),
+                    "pending_count": pending_aggs["pending_count"],
                     "user_role": current_user.role,
                     "full_name": current_user.full_name,
                 },
@@ -240,7 +235,7 @@ class KPIService(BaseService):
 
     def get_pending_comisiones_sum(
         self,
-        current_user: CurrentUser,
+        current_user: User,
     ) -> ServiceResult:
         """
         Sum of comisiones (commissions) for pending transactions.
@@ -258,7 +253,7 @@ class KPIService(BaseService):
         )
 
         try:
-            pending_aggs: dict[str, object] = (
+            pending_aggs: PendingAggregates = (
                 self._repo.get_pending_aggregates(
                     salesman_filter=salesman_filter,
                 )
@@ -266,9 +261,9 @@ class KPIService(BaseService):
             return ServiceResult(
                 success=True,
                 data={
-                    "total_pending_comisiones": float(
-                        pending_aggs.get("total_pending_comisiones", 0.0),
-                    ),
+                    "total_pending_comisiones": pending_aggs[
+                        "total_pending_comisiones"
+                    ],
                     "user_role": current_user.role,
                     "full_name": current_user.full_name,
                 },
@@ -287,7 +282,7 @@ class KPIService(BaseService):
 
     def get_average_gross_margin(
         self,
-        current_user: CurrentUser,
+        current_user: User,
         months_back: Optional[int] = None,
         status_filter: Optional[str] = None,
     ) -> ServiceResult:
