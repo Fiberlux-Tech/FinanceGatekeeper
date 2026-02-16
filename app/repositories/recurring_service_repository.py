@@ -6,7 +6,7 @@ Handles data access for RecurringService line items belonging to transactions.
 
 from __future__ import annotations
 
-import sqlite3
+from decimal import Decimal
 from typing import Optional
 
 from app.logger import StructuredLogger
@@ -34,7 +34,7 @@ class RecurringServiceRepository(BaseRepository):
         Returns:
             The RecurringService if found, or None.
         """
-        try:
+        def _supabase() -> Optional[RecurringService]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -42,55 +42,45 @@ class RecurringServiceRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                return RecurringService(**response.data)
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for recurring service lookup by id: %s", exc
-            )
+            return RecurringService(**response.data) if response.data else None
 
-        try:
+        def _sqlite() -> Optional[RecurringService]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE id = ?", (item_id,)
             ).fetchone()
-            if row:
-                return RecurringService(**dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_id (recurring_services): %s",
-                sqlite_exc,
-            )
-        return None
+            return RecurringService(**dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_id (recurring_services)",
+        )
 
     def get_by_transaction(self, transaction_id: str) -> list[RecurringService]:
         """Fetch all recurring services for a transaction."""
-        try:
+        def _supabase() -> list[RecurringService]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
                 .eq("transaction_id", transaction_id)
                 .execute()
             )
-            return [
-                RecurringService(**row) for row in response.data
-            ]
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for recurring services: %s", exc
-            )
+            return [RecurringService(**row) for row in response.data]
 
-        try:
+        def _sqlite() -> list[RecurringService]:
             rows = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
                 (transaction_id,),
             ).fetchall()
             return [RecurringService(**dict(row)) for row in rows]
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_transaction (recurring_services): %s",
-                sqlite_exc,
-            )
-            return []
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=list,
+            operation_name="get_by_transaction (recurring_services)",
+        )
 
     def replace_for_transaction(
         self, transaction_id: str, services: list[RecurringService]
@@ -223,15 +213,15 @@ class RecurringServiceRepository(BaseRepository):
                     svc.tipo_servicio,
                     svc.nota,
                     svc.ubicacion,
-                    svc.quantity,
-                    svc.price_original,
+                    float(svc.quantity) if isinstance(svc.quantity, Decimal) else svc.quantity,
+                    float(svc.price_original) if isinstance(svc.price_original, Decimal) else svc.price_original,
                     str(svc.price_currency),
-                    svc.price_pen,
-                    svc.cost_unit_1_original,
-                    svc.cost_unit_2_original,
+                    float(svc.price_pen) if isinstance(svc.price_pen, Decimal) else svc.price_pen,
+                    float(svc.cost_unit_1_original) if isinstance(svc.cost_unit_1_original, Decimal) else svc.cost_unit_1_original,
+                    float(svc.cost_unit_2_original) if isinstance(svc.cost_unit_2_original, Decimal) else svc.cost_unit_2_original,
                     str(svc.cost_unit_currency),
-                    svc.cost_unit_1_pen,
-                    svc.cost_unit_2_pen,
+                    float(svc.cost_unit_1_pen) if isinstance(svc.cost_unit_1_pen, Decimal) else svc.cost_unit_1_pen,
+                    float(svc.cost_unit_2_pen) if isinstance(svc.cost_unit_2_pen, Decimal) else svc.cost_unit_2_pen,
                     svc.proveedor,
                 ),
             )

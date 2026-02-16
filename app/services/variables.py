@@ -13,6 +13,7 @@ Refactored from legacy Flask service:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from app.models.user import User
@@ -216,7 +217,7 @@ class VariableService(BaseService):
     def get_latest_master_variables(
         self,
         variable_names: list[str],
-    ) -> dict[str, Optional[float]]:
+    ) -> dict[str, Optional[Decimal]]:
         """
         Retrieve the most recent value for each requested variable name.
 
@@ -228,7 +229,7 @@ class VariableService(BaseService):
             variable_names: List of variable identifiers to look up.
 
         Returns:
-            Dict mapping each variable name to its latest float value,
+            Dict mapping each variable name to its latest Decimal value,
             or None if no historical record exists.
         """
         if not variable_names:

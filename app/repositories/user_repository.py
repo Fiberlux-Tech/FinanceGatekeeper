@@ -39,7 +39,7 @@ class UserRepository(BaseRepository):
 
     def get_by_id(self, user_id: str) -> Optional[User]:
         """Fetch a user by primary key. Tries Supabase first, falls back to SQLite."""
-        try:
+        def _supabase() -> Optional[User]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -47,26 +47,21 @@ class UserRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                user = User(**response.data)
-                self._cache_to_sqlite(user)
-                return user
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for user lookup: %s", exc)
+            return User(**response.data) if response.data else None
 
-        # Offline fallback
-        try:
+        def _sqlite() -> Optional[User]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE id = ?", (user_id,)
             ).fetchone()
-            if row:
-                return User(**dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_id (profiles): %s",
-                sqlite_exc,
-            )
-        return None
+            return User(**dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_id (profiles)",
+            on_supabase_success=self._cache_to_sqlite,
+        )
 
     def get_by_email(self, email: str) -> Optional[User]:
         """Fetch a user by email address.
@@ -81,7 +76,8 @@ class UserRepository(BaseRepository):
             The User if found, or None.
         """
         normalized_email = email.strip().lower()
-        try:
+
+        def _supabase() -> Optional[User]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -89,30 +85,25 @@ class UserRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                user = User(**response.data)
-                self._cache_to_sqlite(user)
-                return user
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for email lookup: %s", exc)
+            return User(**response.data) if response.data else None
 
-        # Offline fallback
-        try:
+        def _sqlite() -> Optional[User]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE email = ?", (normalized_email,)
             ).fetchone()
-            if row:
-                return User(**dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_email (profiles): %s",
-                sqlite_exc,
-            )
-        return None
+            return User(**dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_email (profiles)",
+            on_supabase_success=self._cache_to_sqlite,
+        )
 
     def get_by_full_name(self, full_name: str) -> Optional[User]:
         """Fetch a user by full_name. Tries Supabase first, falls back to SQLite."""
-        try:
+        def _supabase() -> Optional[User]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -120,53 +111,46 @@ class UserRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                user = User(**response.data)
-                self._cache_to_sqlite(user)
-                return user
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for full_name lookup: %s", exc)
+            return User(**response.data) if response.data else None
 
-        try:
+        def _sqlite() -> Optional[User]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE full_name = ?", (full_name,)
             ).fetchone()
-            if row:
-                return User(**dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_full_name (profiles): %s",
-                sqlite_exc,
-            )
-        return None
+            return User(**dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_full_name (profiles)",
+            on_supabase_success=self._cache_to_sqlite,
+        )
 
     def get_all(self) -> list[User]:
         """Fetch all users. Excludes sensitive fields (password_hash)."""
-        try:
+        def _supabase() -> list[User]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("id, email, full_name, role, created_at, updated_at")
                 .execute()
             )
-            users = [User(**row) for row in response.data]
-            for user in users:
-                self._cache_to_sqlite(user)
-            return users
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for get_all users: %s", exc)
+            return [User(**row) for row in response.data]
 
-        try:
+        def _sqlite() -> list[User]:
             rows = self.sqlite.execute(
                 f"SELECT id, email, full_name, role, created_at, updated_at "
                 f"FROM {self.TABLE}"
             ).fetchall()
             return [User(**dict(row)) for row in rows]
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_all (profiles): %s",
-                sqlite_exc,
-            )
-            return []
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=list,
+            operation_name="get_all (profiles)",
+            on_supabase_success=lambda users: [self._cache_to_sqlite(u) for u in users],
+        )
 
     def upsert(self, user: User) -> User:
         """Insert or update a user. Writes to Supabase and caches to SQLite."""

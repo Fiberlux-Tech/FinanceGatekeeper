@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
 from pydantic_settings import BaseSettings
 from pydantic import Field, SecretStr, model_validator
@@ -47,6 +47,14 @@ class AppConfig(BaseSettings):
         "comisiones": "C10",
     })
 
+    # Field type classification for header cell parsing (M6).
+    # Single source of truth — excel_parser.py imports these instead of
+    # maintaining its own hardcoded sets.  ClassVar so Pydantic-settings
+    # does not try to load them from environment variables.
+    DECIMAL_FIELDS: ClassVar[frozenset[str]] = frozenset({"mrc", "nrc", "comisiones"})
+    INT_FIELDS: ClassVar[frozenset[str]] = frozenset({"company_id", "order_id", "plazo_contrato"})
+    BOOL_FIELDS: ClassVar[frozenset[str]] = frozenset({"aplica_carta_fianza"})
+
     RECURRING_SERVICES_START_ROW: int = 14
     RECURRING_SERVICES_COLUMNS: dict[str, str] = Field(default_factory=lambda: {
         "tipo_servicio": "J",
@@ -76,6 +84,13 @@ class AppConfig(BaseSettings):
     INBOX_FOLDER_NAME: str = "01_INBOX"
     ARCHIVE_APPROVED_FOLDER_NAME: str = "02_ARCHIVE_APPROVED"
     ARCHIVE_REJECTED_FOLDER_NAME: str = "03_ARCHIVE_REJECTED"
+
+    # --- Excel Parser ---
+    MAX_EMPTY_ROWS: int = 5
+
+    # --- Logging ---
+    LOG_MAX_BYTES: int = 5_242_880  # 5 MB
+    LOG_BACKUP_COUNT: int = 3
 
     # --- File Watcher ---
     WATCHER_POLL_INTERVAL_S: float = 1.0

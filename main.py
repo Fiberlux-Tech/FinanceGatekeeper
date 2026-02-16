@@ -26,7 +26,7 @@ from app.services import create_services
 from app.services.session_cache import SessionCacheService
 from app.ui.app_shell import AppShell
 from app.ui.module_registry import ModuleRegistry
-from app.ui.views.dashboard_view import DashboardView
+from app.ui.views.inbox_card_view import InboxCardView
 from app.ui.views.settings_view import SettingsView
 
 
@@ -94,11 +94,16 @@ def main() -> None:
         module_id="gatekeeper",
         display_name="Gatekeeper",
         icon="\U0001F6E1",  # Shield
-        factory=lambda parent: DashboardView(
+        factory=lambda parent: InboxCardView(
             parent=parent,
             session=session,
-            db=db,
-            logger=get_logger("dashboard"),
+            inbox_scan=services.get("inbox_scan_service"),
+            file_watcher=services.get("file_watcher_service"),
+            native_opener=services["native_opener_service"],
+            transaction_workflow=services.get("transaction_workflow_service"),
+            transaction_crud=services.get("transaction_crud_service"),
+            excel_parser=services.get("excel_parser_service"),
+            logger=get_logger("inbox_cards"),
         ),
         required_roles=frozenset({"SALES", "FINANCE", "ADMIN"}),
         default=True,

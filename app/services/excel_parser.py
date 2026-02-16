@@ -29,6 +29,8 @@ from __future__ import annotations
 import hashlib
 import traceback
 from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
 from typing import BinaryIO, Optional, Union
 
 from openpyxl import load_workbook
@@ -36,8 +38,9 @@ from openpyxl.utils import column_index_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.config import AppConfig
+from app.config import AppConfig, get_config
 from app.logger import StructuredLogger
+from app.models.enums import FileStatus
 from app.models.service_models import ServiceResult
 from app.services.base_service import BaseService
 from app.services.financial_engine import calculate_financial_metrics
@@ -51,8 +54,8 @@ from app.utils.string_helpers import normalize_keys
 # Module-level type-safe conversion helpers
 # ---------------------------------------------------------------------------
 
-def safe_float(val: Union[int, float, str, None], logger: StructuredLogger) -> float:
-    """Convert a value to float, treating None, empty strings, and invalid values as 0.0.
+def safe_decimal(val: Union[int, float, str, None], logger: StructuredLogger) -> Decimal:
+    """Convert a value to Decimal, treating None, empty strings, and invalid values as Decimal("0").
 
     When using ``data_only=True``, openpyxl may return Excel error strings
     (#VALUE!, #DIV/0!, etc.) instead of computed values.  These are detected
@@ -63,22 +66,22 @@ def safe_float(val: Union[int, float, str, None], logger: StructuredLogger) -> f
         logger: Logger instance for warning on conversion failures.
 
     Returns:
-        The float representation of *val*, or ``0.0`` on failure.
+        The Decimal representation of *val*, or ``Decimal("0")`` on failure.
     """
     if val is not None and val != '':
         # Check for Excel error strings
         if isinstance(val, str) and val.startswith('#'):
             logger.warning("Excel error detected in cell: %s - Template may be broken", val)
-            return 0.0
+            return Decimal("0")
 
         try:
-            return float(val)
-        except (ValueError, TypeError):
+            return Decimal(str(val))
+        except (ValueError, TypeError, ArithmeticError):
             logger.warning(
-                "Failed to convert value to float: %s (type: %s)", val, type(val).__name__,
+                "Failed to convert value to Decimal: %s (type: %s)", val, type(val).__name__,
             )
-            return 0.0
-    return 0.0
+            return Decimal("0")
+    return Decimal("0")
 
 
 def safe_int(val: Union[int, float, str, None]) -> int:
@@ -99,6 +102,18 @@ def safe_int(val: Union[int, float, str, None]) -> int:
         except (ValueError, TypeError):
             return 0
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Module-level field classification for header cell parsing
+# Sourced from AppConfig (single source of truth — M6).
+# Imported at module level to avoid repeated attribute lookups in hot loops.
+# ---------------------------------------------------------------------------
+_cfg: AppConfig = get_config()
+_DECIMAL_FIELDS: frozenset[str] = _cfg.DECIMAL_FIELDS
+_INT_FIELDS: frozenset[str] = _cfg.INT_FIELDS
+_BOOL_FIELDS: frozenset[str] = _cfg.BOOL_FIELDS
+_NUMERIC_FIELDS: frozenset[str] = _DECIMAL_FIELDS | _INT_FIELDS
 
 
 def _compute_sha256(file_stream: BinaryIO) -> str:
@@ -142,6 +157,7 @@ class ExcelParserService(BaseService):
         variable_service: VariableService,
         config: AppConfig,
         logger: StructuredLogger,
+        file_guards: Optional["FileGuardsService"] = None,
     ) -> None:
         """Initialise the parser with its runtime dependencies.
 
@@ -149,18 +165,24 @@ class ExcelParserService(BaseService):
             variable_service: Service used to retrieve master variable rates.
             config: Application configuration (injected, not singleton).
             logger: Logger instance for structured logging.
+            file_guards: Optional file guards service for path-based safety
+                checks.  When ``None``, path-based methods skip the
+                readiness check and open the file directly.
         """
         super().__init__(logger)
         self._variable_service: VariableService = variable_service
         self._config: AppConfig = config
+        # Lazy import type only — avoids circular import at module level.
+        from app.services.file_guards import FileGuardsService as _FGS
+        self._file_guards: Optional[_FGS] = file_guards
 
     # ------------------------------------------------------------------
     # Type aliases for internal data structures
     # ------------------------------------------------------------------
-    _RowDict = dict[str, Union[int, float, str, None]]
-    _HeaderDict = dict[str, Union[float, str, bool, None, dict[str, Union[float, str, None]]]]
-    _MasterRates = dict[str, Optional[float]]
-    _MasterSnapshot = dict[str, Union[float, str, None]]
+    _RowDict = dict[str, Union[int, float, Decimal, str, None]]
+    _HeaderDict = dict[str, Union[Decimal, float, str, bool, None, dict[str, Union[Decimal, float, str, None]]]]
+    _MasterRates = dict[str, Optional[Decimal]]
+    _MasterSnapshot = dict[str, Union[Decimal, str, None]]
 
     # ------------------------------------------------------------------
     # Public API
@@ -275,6 +297,164 @@ class ExcelParserService(BaseService):
                 status_code=500,
             )
 
+    def extract_metadata(self, file_path: Path) -> ServiceResult:
+        """Extract header metadata from a local Excel file (lightweight).
+
+        Reads only the header cells (C2–C10) defined in
+        ``config.VARIABLES_TO_EXTRACT`` without parsing the full table
+        rows or running the financial engine.  Designed for fast card
+        population in the Card Engine (~50 ms per file).
+
+        Runs ``FileGuardsService.check_file_status`` before opening
+        the file when *file_guards* was provided at construction time.
+
+        Args:
+            file_path: Absolute path to a ``.xlsx`` file in the inbox.
+
+        Returns:
+            ``ServiceResult`` with ``data`` containing a ``dict`` of
+            header field values on success, or an error on failure.
+        """
+        try:
+            # Safety check (when file guards are available)
+            if self._file_guards is not None:
+                check = self._file_guards.check_file_status(file_path)
+                if check.status != FileStatus.READY:
+                    return ServiceResult(
+                        success=False,
+                        error=check.message,
+                        status_code=423,
+                    )
+
+            workbook: Optional[Workbook] = None
+            try:
+                workbook = load_workbook(
+                    file_path, read_only=True, data_only=True,
+                )
+                worksheet: Worksheet = workbook[self._config.PLANTILLA_SHEET_NAME]
+
+                header_data: dict[str, Union[int, float, str]] = {}
+                for var_name, cell_ref in self._config.VARIABLES_TO_EXTRACT.items():
+                    cell_value = worksheet[cell_ref].value
+                    if var_name in _DECIMAL_FIELDS:
+                        header_data[var_name] = safe_decimal(cell_value, self._logger)
+                    elif var_name in _INT_FIELDS:
+                        header_data[var_name] = safe_int(cell_value)
+                    elif var_name in _BOOL_FIELDS:
+                        header_data[var_name] = bool(cell_value) if cell_value is not None else False
+                    else:
+                        header_data[var_name] = (
+                            str(cell_value) if cell_value is not None else ""
+                        )
+
+                header_data = normalize_keys(header_data)
+            finally:
+                if workbook:
+                    workbook.close()
+
+            self._logger.debug(
+                "Metadata extracted from %s: %s",
+                file_path.name,
+                {k: v for k, v in header_data.items() if k in ("client_name", "salesman", "unidad_negocio")},
+            )
+            return ServiceResult(success=True, data=header_data)
+
+        except PermissionError:
+            self._logger.warning(
+                "File locked during metadata extraction: %s", file_path.name,
+            )
+            return ServiceResult(
+                success=False,
+                error=(
+                    "The file is locked by another application. "
+                    "Please close Excel and try again."
+                ),
+                status_code=423,
+            )
+
+        except KeyError:
+            self._logger.warning(
+                "Missing worksheet '%s' in %s",
+                self._config.PLANTILLA_SHEET_NAME,
+                file_path.name,
+            )
+            return ServiceResult(
+                success=False,
+                error=(
+                    f"Invalid template: worksheet "
+                    f"'{self._config.PLANTILLA_SHEET_NAME}' not found."
+                ),
+                status_code=400,
+            )
+
+        except Exception as exc:
+            self._logger.error(
+                "Metadata extraction failed for %s: %s\n%s",
+                file_path.name,
+                exc,
+                traceback.format_exc(),
+            )
+            return ServiceResult(
+                success=False,
+                error=f"Failed to read file: {exc}",
+                status_code=500,
+            )
+
+    def process_local_file(self, file_path: Path) -> ServiceResult:
+        """Parse a local Excel file through the full financial pipeline.
+
+        Equivalent to ``process_excel_file()`` but accepts a filesystem
+        ``Path`` instead of a ``BinaryIO`` stream.  Opens the file,
+        delegates to the existing 6-step pipeline, and returns the
+        same ``ServiceResult`` data package.
+
+        Args:
+            file_path: Absolute path to a ``.xlsx`` file.
+
+        Returns:
+            ``ServiceResult`` with the full financial data package on
+            success, or an error on failure.
+        """
+        try:
+            # Safety check
+            if self._file_guards is not None:
+                check = self._file_guards.check_file_status(file_path)
+                if check.status != FileStatus.READY:
+                    return ServiceResult(
+                        success=False,
+                        error=check.message,
+                        status_code=423,
+                    )
+
+            with open(file_path, "rb") as fh:
+                return self.process_excel_file(fh)
+
+        except PermissionError:
+            self._logger.warning(
+                "File locked during full parse: %s", file_path.name,
+            )
+            return ServiceResult(
+                success=False,
+                error=(
+                    "The file is locked by another application. "
+                    "Please close Excel and try again."
+                ),
+                status_code=423,
+            )
+
+        except Exception as exc:
+            self._logger.error(
+                "process_local_file failed for %s: %s\n%s",
+                file_path.name,
+                exc,
+                traceback.format_exc(),
+            )
+            return ServiceResult(
+                success=False,
+                error=f"An unexpected error occurred: {exc}",
+                status_code=500,
+            )
+
     # ------------------------------------------------------------------
     # Private helpers — each encapsulates one responsibility
     # ------------------------------------------------------------------
@@ -355,14 +535,16 @@ class ExcelParserService(BaseService):
         Returns:
             Enriched header dict with snake_case keys and injected rates.
         """
-        _NUMERIC_FIELDS: set[str] = {'MRC', 'NRC', 'plazoContrato', 'comisiones', 'companyID', 'orderID'}
-
-        header_data: dict[str, Union[float, str]] = {}
+        header_data: dict[str, Union[int, float, str]] = {}
         for var_name, cell_ref in self._config.VARIABLES_TO_EXTRACT.items():
             cell_value = worksheet[cell_ref].value
 
-            if var_name in _NUMERIC_FIELDS:
-                header_data[var_name] = safe_float(cell_value, self._logger)
+            if var_name in _DECIMAL_FIELDS:
+                header_data[var_name] = safe_decimal(cell_value, self._logger)
+            elif var_name in _INT_FIELDS:
+                header_data[var_name] = safe_int(cell_value)
+            elif var_name in _BOOL_FIELDS:
+                header_data[var_name] = bool(cell_value) if cell_value is not None else False
             else:
                 header_data[var_name] = str(cell_value) if cell_value is not None else ""
 
@@ -370,7 +552,7 @@ class ExcelParserService(BaseService):
 
         # The real commission is calculated by the financial engine later.
         if 'comisiones' in header_data:
-            header_data['comisiones'] = 0.0
+            header_data['comisiones'] = Decimal("0")
 
         # Inject master variables into header data
         header_data['tipo_cambio'] = latest_rates['tipo_cambio']
@@ -401,7 +583,7 @@ class ExcelParserService(BaseService):
         Returns:
             List of normalized (snake_case) row dictionaries.
         """
-        max_empty_rows: int = 5
+        max_empty_rows: int = self._config.MAX_EMPTY_ROWS
         rows: list[_RowDict] = []
         empty_row_count: int = 0
 
@@ -453,7 +635,7 @@ class ExcelParserService(BaseService):
         """
         # --- Fixed costs: currency tagging & preview totals ---
         for item in fixed_costs_data:
-            item['costo_unitario_original'] = safe_float(item.get('costo_unitario', 0), self._logger)
+            item['costo_unitario_original'] = safe_decimal(item.get('costo_unitario', 0), self._logger)
             item['costo_unitario_currency'] = 'USD'
 
             cantidad = item.get('cantidad')
@@ -461,15 +643,15 @@ class ExcelParserService(BaseService):
             if cantidad is not None and costo_original is not None:
                 item['total'] = cantidad * costo_original
 
-            item['periodo_inicio'] = safe_float(item.get('periodo_inicio', 0), self._logger)
-            item['duracion_meses'] = safe_float(item.get('duracion_meses', 1), self._logger)
+            item['periodo_inicio'] = safe_decimal(item.get('periodo_inicio', 0), self._logger)
+            item['duracion_meses'] = safe_decimal(item.get('duracion_meses', 1), self._logger)
 
         # --- Recurring services: currency tagging & preview totals ---
         for item in recurring_services_data:
-            q: float = safe_float(item.get('q', 0), self._logger)
-            p_original: float = safe_float(item.get('p', 0), self._logger)
-            cu1_original: float = safe_float(item.get('cu1', 0), self._logger)
-            cu2_original: float = safe_float(item.get('cu2', 0), self._logger)
+            q: Decimal = safe_decimal(item.get('q', 0), self._logger)
+            p_original: Decimal = safe_decimal(item.get('p', 0), self._logger)
+            cu1_original: Decimal = safe_decimal(item.get('cu1', 0), self._logger)
+            cu2_original: Decimal = safe_decimal(item.get('cu2', 0), self._logger)
 
             item['quantity'] = q
             item['price_original'] = p_original
@@ -482,8 +664,9 @@ class ExcelParserService(BaseService):
             item['egreso'] = (cu1_original + cu2_original) * q
 
         # Total installation cost in original currency
-        calculated_costo_instalacion: float = sum(
-            item.get('total', 0) for item in fixed_costs_data if item.get('total') is not None
+        calculated_costo_instalacion: Decimal = sum(
+            (item.get('total', Decimal("0")) for item in fixed_costs_data if item.get('total') is not None),
+            Decimal("0"),
         )
 
         # Validate required fields

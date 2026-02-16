@@ -7,6 +7,7 @@ Replaces raw dict passing between layers.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Generic, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,15 +35,15 @@ class CommissionInput(BaseModel):
     """Validated input for commission calculation."""
 
     unidad_negocio: str
-    total_revenue: float = Field(ge=0)
-    mrc_pen: float = Field(ge=0)
-    plazo_contrato: int = Field(ge=0)
+    total_revenue: Decimal = Field(ge=0)
+    mrc_pen: Decimal = Field(ge=0)
+    plazo_contrato: int = Field(ge=1, le=480)
     payback: Optional[int] = None
-    gross_margin_ratio: float  # Negative margins are valid (expenses > revenue)
+    gross_margin_ratio: Decimal = Field(ge=-1.0, le=2.0)
     # GIGALAN-specific fields
     gigalan_region: Optional[str] = None
     gigalan_sale_type: Optional[str] = None
-    gigalan_old_mrc: Optional[float] = None
+    gigalan_old_mrc: Optional[Decimal] = None
 
 
 # ---------------------------------------------------------------------------
@@ -59,19 +60,19 @@ class RecurringServiceInput(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    quantity: int = 0
-    price_original: float = 0.0
+    quantity: int = Field(default=0, ge=0)
+    price_original: Decimal = Decimal("0")
     price_currency: Currency = Currency.PEN
-    cost_unit_1_original: float = 0.0
-    cost_unit_2_original: float = 0.0
+    cost_unit_1_original: Decimal = Decimal("0")
+    cost_unit_2_original: Decimal = Decimal("0")
     cost_unit_currency: Currency = Currency.USD
 
     # Computed output fields -- set by the engine after processing
-    price_pen: Optional[float] = None
-    ingreso_pen: Optional[float] = None
-    cost_unit_1_pen: Optional[float] = None
-    cost_unit_2_pen: Optional[float] = None
-    egreso_pen: Optional[float] = None
+    price_pen: Optional[Decimal] = None
+    ingreso_pen: Optional[Decimal] = None
+    cost_unit_1_pen: Optional[Decimal] = None
+    cost_unit_2_pen: Optional[Decimal] = None
+    egreso_pen: Optional[Decimal] = None
 
 
 class FixedCostInput(BaseModel):
@@ -87,15 +88,15 @@ class FixedCostInput(BaseModel):
     id: Optional[str] = None
     categoria: Optional[str] = None
     tipo_servicio: Optional[str] = None
-    cantidad: int = 0
-    costo_unitario_original: float = 0.0
+    cantidad: int = Field(default=0, ge=0)
+    costo_unitario_original: Decimal = Decimal("0")
     costo_unitario_currency: Currency = Currency.USD
     periodo_inicio: int = 0
     duracion_meses: int = 1
 
     # Computed output fields -- set by the engine after processing
-    costo_unitario_pen: Optional[float] = None
-    total_pen: Optional[float] = None
+    costo_unitario_pen: Optional[Decimal] = None
+    total_pen: Optional[Decimal] = None
 
 
 class FinancialEngineInput(BaseModel):
@@ -107,21 +108,21 @@ class FinancialEngineInput(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    tipo_cambio: float = 1.0
+    tipo_cambio: Decimal = Decimal("1")
     plazo_contrato: int = 0
     recurring_services: list[RecurringServiceInput] = Field(default_factory=list)
-    mrc_original: float = 0.0
+    mrc_original: Decimal = Decimal("0")
     mrc_currency: Currency = Currency.PEN
-    nrc_original: float = 0.0
+    nrc_original: Decimal = Decimal("0")
     nrc_currency: Currency = Currency.PEN
     fixed_costs: list[FixedCostInput] = Field(default_factory=list)
     aplica_carta_fianza: bool = False
-    tasa_carta_fianza: float = 0.0
-    costo_capital_anual: float = 0.0
+    tasa_carta_fianza: Decimal = Decimal("0")
+    costo_capital_anual: Decimal = Decimal("0")
     unidad_negocio: str = ""
     gigalan_region: Optional[str] = None
     gigalan_sale_type: Optional[str] = None
-    gigalan_old_mrc: Optional[float] = None
+    gigalan_old_mrc: Optional[Decimal] = None
 
 
 # ---------------------------------------------------------------------------
@@ -136,13 +137,13 @@ class KPIResult(BaseModel):
     gross margin.
     """
 
-    van: float
-    tir: Optional[float] = None
+    van: Decimal
+    tir: Optional[Decimal] = None
     payback: Optional[int] = None
-    total_revenue: float
-    total_expense: float
-    gross_margin: float
-    gross_margin_ratio: float
+    total_revenue: Decimal
+    total_expense: Decimal
+    gross_margin: Decimal
+    gross_margin_ratio: Decimal
 
 
 class FinancialMetricsResult(BaseModel):
@@ -156,30 +157,30 @@ class FinancialMetricsResult(BaseModel):
     """
 
     # MRC / NRC
-    mrc_original: float
-    mrc_pen: float
-    nrc_original: float
-    nrc_pen: float
+    mrc_original: Decimal
+    mrc_pen: Decimal
+    nrc_original: Decimal
+    nrc_pen: Decimal
 
     # KPIs
-    van: float
-    tir: Optional[float] = None
+    van: Decimal
+    tir: Optional[Decimal] = None
     payback: Optional[int] = None
-    total_revenue: float
-    total_expense: float
-    gross_margin: float
-    gross_margin_ratio: float
+    total_revenue: Decimal
+    total_expense: Decimal
+    gross_margin: Decimal
+    gross_margin_ratio: Decimal
 
     # Commission
-    comisiones: float
-    comisiones_rate: float
+    comisiones: Decimal
+    comisiones_rate: Decimal
 
     # Installation costs
-    costo_instalacion: float
-    costo_instalacion_ratio: float
+    costo_instalacion: Decimal
+    costo_instalacion_ratio: Decimal
 
     # Carta Fianza
-    costo_carta_fianza: float
+    costo_carta_fianza: Decimal
     aplica_carta_fianza: bool
 
     # Timeline (deeply nested dict -- not validated beyond top-level)

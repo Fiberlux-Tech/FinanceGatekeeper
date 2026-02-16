@@ -67,7 +67,7 @@ FONT_BUTTON: Final[tuple[str, int, str]] = (FONT_FAMILY, 13, "bold")
 # Dimensions
 # ---------------------------------------------------------------------------
 
-SIDEBAR_WIDTH: Final[int] = 250
+SIDEBAR_WIDTH: Final[int] = 180
 STATUS_BAR_HEIGHT: Final[int] = 30
 LOGIN_WINDOW_WIDTH: Final[int] = 480
 LOGIN_WINDOW_HEIGHT: Final[int] = 780
@@ -77,3 +77,16 @@ CORNER_RADIUS: Final[int] = 8
 PADDING_SM: Final[int] = 8
 PADDING_MD: Final[int] = 16
 PADDING_LG: Final[int] = 24
+
+# Card states
+CARD_SELECTED_BG: Final[str] = "#f5f3ff"  # Subtle purple tint for selected card
+CARD_WARNING_COLOR: Final[str] = "#e67e22"  # Orange for parse-error warning icon
+
+# Status hover variants
+STATUS_ONLINE_HOVER: Final[str] = "#1e8449"
+STATUS_OFFLINE_HOVER: Final[str] = "#c0392b"
+
+# Discrepancy / warning alert
+WARNING_BG: Final[str] = "#fff3cd"
+WARNING_BORDER: Final[str] = "#ffc107"
+WARNING_TEXT: Final[str] = "#856404"

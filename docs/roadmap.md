@@ -65,11 +65,11 @@ Core Tables:
 
 [x] Relational Schema Deployment: Supabase migration 004 (`20250104000000_relational_transaction_engine.sql`) creates all 5 tables (transactions, fixed_costs, recurring_services, audit_logs, master_variables) with NUMERIC(18,6) precision for financial amounts, NUMERIC(10,6) for rates/ratios, JSONB for cached computations, CHECK constraints on currencies and approval_status, foreign keys with CASCADE deletes, 10 indexes, `updated_at` trigger, and 20 RLS policies (service_role full access, SALES sees own transactions via `created_by`, FINANCE/ADMIN sees all). Local SQLite schema bumped to v10 with `created_by TEXT` column added to transactions. Pydantic Transaction model and repository `_SQLITE_COLUMNS` updated to match.
 
-[ ] Approval Command: Atomic sequence of Hash -> Rename -> Encrypt -> Move to 02_ARCHIVE_APPROVED/{year}/{BU}/ -> Local DB Write (header + all detail rows).
+[x] Approval Command: Full approve-archive pipeline implemented in `FileArchivalService.archive_approved()` and orchestrated by `TransactionWorkflowService.approve_transaction_with_archival()`. Sequence: file readiness check (lock/sync/temp marker) → SHA-256 chain-of-custody verification → filename rename (`{transaction_id}_{original}`) → Fernet AES-128-CBC encryption with DPAPI-protected key (Windows) → `shutil.move` to `02_ARCHIVE_APPROVED/{year}/{BU}/` → DB approval (RBAC, metrics recalculation, audit log, email notification). UI: green "Approve" button in DetailPanel Decision section, worker-thread execution with error dialog on failure, card removal on success.
 
-[ ] Rejection Command: Move to 03_ARCHIVE_REJECTED/{year}/{BU}/ -> Background Email Notification (Async Thread).
+[x] Rejection Command: Reject-archive pipeline in `FileArchivalService.archive_rejected()` orchestrated by `TransactionWorkflowService.reject_transaction_with_archival()`. Same safety guards and hash verification as approval but targets `03_ARCHIVE_REJECTED/{year}/{BU}/` and skips encryption. UI: red "Reject" button with `CTkInputDialog` for rejection note (mandatory), worker-thread execution, DB rejection with rejection_note persistence, email notification via `EmailService.send_status_update_email()`.
 
-[ ] Background Sync Worker: Push local SQLite records (all three tables) to Supabase with retry logic.
+[x] Background Sync Worker: `SyncWorkerService` daemon thread drains `sync_queue` table to Supabase. Polls pending rows (batch of 50) with exponential backoff (30s base, 300s cap, 2^n scaling). Supports insert/update/upsert/replace operations across 6 allowed tables (transactions, fixed_costs, recurring_services, audit_log, master_variables, profiles). Failed rows retry up to 5 times before being marked `permanently_failed`. Started on login, stopped on logout/close. Thread-safe via `DatabaseManager.write_lock`.
 
 Phase 5: Late-Stage — Dashboard, Audit UI & Auto-Update
 

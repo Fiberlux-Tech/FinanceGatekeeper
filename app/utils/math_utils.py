@@ -7,26 +7,26 @@ No external dependencies (no numpy/scipy needed).
 
 from __future__ import annotations
 
-import math
+from decimal import Decimal
 
 __all__: list[str] = ["calculate_npv", "calculate_irr"]
 
-# Threshold below which a floating-point value is treated as zero.
-_ZERO_THRESHOLD: float = 1e-12
+# Threshold below which a Decimal value is treated as zero.
+_ZERO_THRESHOLD: Decimal = Decimal("1E-12")
 
 # Bounds for the Newton-Raphson IRR solver.  Rates outside this range
 # are economically meaningless and indicate divergence.
-_IRR_LOWER_BOUND: float = -0.999
-_IRR_UPPER_BOUND: float = 100.0  # 10,000% — generous upper limit
+_IRR_LOWER_BOUND: Decimal = Decimal("-0.999")
+_IRR_UPPER_BOUND: Decimal = Decimal("100")  # 10,000% — generous upper limit
 
 
-def _validate_finite(value: float, name: str) -> None:
+def _validate_finite(value: Decimal, name: str) -> None:
     """Raise ``ValueError`` if *value* is NaN or +/-Inf."""
-    if math.isnan(value) or math.isinf(value):
+    if value.is_nan() or value.is_infinite():
         raise ValueError(f"{name} must be a finite number, got {value!r}.")
 
 
-def calculate_npv(rate: float, cash_flows: list[float]) -> float:
+def calculate_npv(rate: Decimal, cash_flows: list[Decimal]) -> Decimal:
     """Calculate Net Present Value.
 
     Discounts each cash flow back to period 0 using the given periodic rate.
@@ -38,7 +38,7 @@ def calculate_npv(rate: float, cash_flows: list[float]) -> float:
                     Must not be empty.  All values must be finite (no NaN/Inf).
 
     Returns:
-        The NPV as a float.
+        The NPV as a Decimal.
 
     Raises:
         ValueError: If *cash_flows* is empty, *rate* <= -1.0, or any input
@@ -52,29 +52,29 @@ def calculate_npv(rate: float, cash_flows: list[float]) -> float:
     for i, cf in enumerate(cash_flows):
         _validate_finite(cf, f"cash_flows[{i}]")
 
-    if rate <= -1.0:
+    if rate <= Decimal("-1"):
         raise ValueError(
             f"rate must be greater than -1.0, got {rate!r}. "
             "A rate of -1.0 or below causes division by zero in discounting."
         )
 
-    npv: float = 0.0
+    npv: Decimal = Decimal("0")
     rate_is_zero: bool = abs(rate) < _ZERO_THRESHOLD
 
     for t, cf in enumerate(cash_flows):
         if rate_is_zero:
             npv += cf
         else:
-            npv += cf / ((1.0 + rate) ** t)
+            npv += cf / ((Decimal("1") + rate) ** t)
 
     return npv
 
 
 def calculate_irr(
-    cash_flows: list[float],
+    cash_flows: list[Decimal],
     max_iterations: int = 1000,
-    tolerance: float = 1e-7,
-) -> float | None:
+    tolerance: Decimal = Decimal("1E-7"),
+) -> Decimal | None:
     """Calculate Internal Rate of Return using the Newton-Raphson method.
 
     The IRR is the discount rate at which the Net Present Value of *cash_flows*
@@ -112,26 +112,26 @@ def calculate_irr(
     if not has_positive or not has_negative:
         return None
 
-    guess: float = 0.1
+    guess: Decimal = Decimal("0.1")
 
     for _ in range(max_iterations):
-        npv: float = 0.0
-        d_npv: float = 0.0
+        npv: Decimal = Decimal("0")
+        d_npv: Decimal = Decimal("0")
 
         for t, cf in enumerate(cash_flows):
-            denominator: float = (1.0 + guess) ** t
+            denominator: Decimal = (Decimal("1") + guess) ** t
             if abs(denominator) < _ZERO_THRESHOLD:
                 # Denominator collapsed to zero -- cannot continue from here.
                 return None
             npv += cf / denominator
             if t > 0:
-                d_npv -= t * cf / ((1.0 + guess) ** (t + 1))
+                d_npv -= t * cf / ((Decimal("1") + guess) ** (t + 1))
 
         # If the derivative is essentially flat, Newton-Raphson cannot step.
         if abs(d_npv) < _ZERO_THRESHOLD:
             return None
 
-        new_guess: float = guess - npv / d_npv
+        new_guess: Decimal = guess - npv / d_npv
 
         # Bounds clamping: if the solver diverges outside the economically
         # meaningful range, clamp it back.  This prevents runaway oscillation

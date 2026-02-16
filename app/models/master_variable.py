@@ -8,6 +8,7 @@ Fields derived from MasterVariable() constructor in variables.py.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -24,7 +25,7 @@ class MasterVariable(BaseModel):
 
     id: Optional[int] = None
     variable_name: str = Field(min_length=1)
-    variable_value: float = Field(ge=0)
+    variable_value: Decimal = Field(ge=0)
     category: str = Field(min_length=1)
     user_id: str
     comment: Optional[str] = None

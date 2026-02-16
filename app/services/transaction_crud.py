@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import traceback
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from app.models.user import User
@@ -85,6 +86,39 @@ class TransactionCrudService(BaseService):
         self._rs_repo = recurring_service_repo
         self._email_service = email_service
         self._variable_service = variable_service
+
+    # ------------------------------------------------------------------
+    # Private static: enrich recurring service PEN fields
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _enrich_recurring_service_pen_fields(
+        service_item: dict[str, object],
+        converter: CurrencyConverter,
+    ) -> None:
+        """Populate ``price_pen``, ``cost_unit_1_pen``, ``cost_unit_2_pen`` in-place.
+
+        Applies currency conversion when the PEN fields are missing, zero,
+        or empty.  Mutates *service_item* directly.
+
+        Args:
+            service_item: A single recurring service dict from the payload.
+            converter: ``CurrencyConverter`` with the active exchange rate.
+        """
+        if service_item.get("price_pen") in [0, Decimal("0"), None, ""]:
+            price_original: Decimal = service_item.get("price_original", Decimal("0"))
+            price_currency: str = service_item.get("price_currency", "PEN")
+            service_item["price_pen"] = converter.to_pen(price_original, price_currency)
+
+        if service_item.get("cost_unit_1_pen") in [0, Decimal("0"), None, ""]:
+            cost_unit_1_original: Decimal = service_item.get("cost_unit_1_original", Decimal("0"))
+            cost_unit_currency: str = service_item.get("cost_unit_currency", "USD")
+            service_item["cost_unit_1_pen"] = converter.to_pen(cost_unit_1_original, cost_unit_currency)
+
+        if service_item.get("cost_unit_2_pen") in [0, Decimal("0"), None, ""]:
+            cost_unit_2_original: Decimal = service_item.get("cost_unit_2_original", Decimal("0"))
+            cost_unit_currency_2: str = service_item.get("cost_unit_currency", "USD")
+            service_item["cost_unit_2_pen"] = converter.to_pen(cost_unit_2_original, cost_unit_currency_2)
 
     # ------------------------------------------------------------------
     # Public helper: update transaction data (scalar + relationships)
@@ -154,28 +188,12 @@ class TransactionCrudService(BaseService):
                 )
                 new_fixed_costs.append(new_cost)
 
-            self._fc_repo.replace_for_transaction(transaction.id, new_fixed_costs)
-
             # 3. Replace RecurringService records via repository
             converter = CurrencyConverter(transaction.tipo_cambio or 1)
             new_recurring_services: list[RecurringService] = []
 
             for service_item in recurring_services_data:
-                # Ensure _pen fields are calculated if missing
-                if service_item.get("price_pen") in [0, None, ""]:
-                    price_original: float = service_item.get("price_original", 0)
-                    price_currency: str = service_item.get("price_currency", "PEN")
-                    service_item["price_pen"] = converter.to_pen(price_original, price_currency)
-
-                if service_item.get("cost_unit_1_pen") in [0, None, ""]:
-                    cost_unit_1_original: float = service_item.get("cost_unit_1_original", 0)
-                    cost_unit_currency: str = service_item.get("cost_unit_currency", "USD")
-                    service_item["cost_unit_1_pen"] = converter.to_pen(cost_unit_1_original, cost_unit_currency)
-
-                if service_item.get("cost_unit_2_pen") in [0, None, ""]:
-                    cost_unit_2_original: float = service_item.get("cost_unit_2_original", 0)
-                    cost_unit_currency_2: str = service_item.get("cost_unit_currency", "USD")
-                    service_item["cost_unit_2_pen"] = converter.to_pen(cost_unit_2_original, cost_unit_currency_2)
+                self._enrich_recurring_service_pen_fields(service_item, converter)
 
                 new_service = RecurringService(
                     transaction_id=transaction.id,
@@ -195,26 +213,18 @@ class TransactionCrudService(BaseService):
                 )
                 new_recurring_services.append(new_service)
 
-            self._rs_repo.replace_for_transaction(transaction.id, new_recurring_services)
+            # Atomic replace: both detail tables in a single SQLite transaction (M4)
+            with self._fc_repo._db.batch_write():
+                self._fc_repo.replace_for_transaction(transaction.id, new_fixed_costs)
+                self._rs_repo.replace_for_transaction(transaction.id, new_recurring_services)
 
             # 4. Update transaction relationships in memory for recalculation
             transaction.fixed_costs = new_fixed_costs
             transaction.recurring_services = new_recurring_services
 
             # 5. Recalculate financial metrics based on new values
-            # Assemble data package for recalculation
-            recalc_data: dict[str, object] = transaction.model_dump()
-            recalc_data["fixed_costs"] = [fc.model_dump() for fc in transaction.fixed_costs]
-            recalc_data["recurring_services"] = [rs.model_dump() for rs in transaction.recurring_services]
-            recalc_data["gigalan_region"] = transaction.gigalan_region
-            recalc_data["gigalan_sale_type"] = transaction.gigalan_sale_type
-            recalc_data["gigalan_old_mrc"] = transaction.gigalan_old_mrc
-            recalc_data["tasa_carta_fianza"] = transaction.tasa_carta_fianza
-            recalc_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
-
-            # Calculate financial metrics
             financial_metrics: dict[str, object] = calculate_financial_metrics(
-                recalc_data,
+                transaction.to_financial_engine_dict(),
             ).model_dump()
             clean_metrics: dict[str, object] = convert_to_json_safe(financial_metrics)
 
@@ -393,21 +403,7 @@ class TransactionCrudService(BaseService):
             recurring_service_models: list[RecurringService] = []
 
             for service_item in data.get("recurring_services", []):
-                # Ensure _pen fields are calculated if missing
-                if service_item.get("price_pen") in [0, None, ""]:
-                    price_original: float = service_item.get("price_original", 0)
-                    price_currency: str = service_item.get("price_currency", "PEN")
-                    service_item["price_pen"] = save_converter.to_pen(price_original, price_currency)
-
-                if service_item.get("cost_unit_1_pen") in [0, None, ""]:
-                    cost_unit_1_original: float = service_item.get("cost_unit_1_original", 0)
-                    cost_unit_currency: str = service_item.get("cost_unit_currency", "USD")
-                    service_item["cost_unit_1_pen"] = save_converter.to_pen(cost_unit_1_original, cost_unit_currency)
-
-                if service_item.get("cost_unit_2_pen") in [0, None, ""]:
-                    cost_unit_2_original: float = service_item.get("cost_unit_2_original", 0)
-                    cost_unit_currency_2: str = service_item.get("cost_unit_currency", "USD")
-                    service_item["cost_unit_2_pen"] = save_converter.to_pen(cost_unit_2_original, cost_unit_currency_2)
+                self._enrich_recurring_service_pen_fields(service_item, save_converter)
 
                 new_service = RecurringService(
                     transaction_id=created_tx.id,
@@ -662,19 +658,9 @@ class TransactionCrudService(BaseService):
                     transaction.id,
                 )
 
-                # 1. Assemble the data package from the model
-                tx_data: dict[str, object] = transaction.model_dump()
-                tx_data["fixed_costs"] = [fc.model_dump() for fc in transaction.fixed_costs]
-                tx_data["recurring_services"] = [rs.model_dump() for rs in transaction.recurring_services]
-                tx_data["gigalan_region"] = transaction.gigalan_region
-                tx_data["gigalan_sale_type"] = transaction.gigalan_sale_type
-                tx_data["gigalan_old_mrc"] = transaction.gigalan_old_mrc
-                tx_data["tasa_carta_fianza"] = transaction.tasa_carta_fianza
-                tx_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
-
-                # 2. Calculate and cache the metrics
+                # 1. Calculate and cache the metrics
                 financial_metrics: dict[str, object] = calculate_financial_metrics(
-                    tx_data,
+                    transaction.to_financial_engine_dict(),
                 ).model_dump()
                 clean_financial_metrics = convert_to_json_safe(financial_metrics)
 
@@ -695,24 +681,24 @@ class TransactionCrudService(BaseService):
             for service in recurring_services_list:
                 # If _pen fields are missing/zero but original values exist, recalculate
                 if (
-                    service.get("ingreso_pen") in [0, None]
+                    service.get("ingreso_pen") in [0, Decimal("0"), None]
                     and service.get("price_original")
                     and service.get("quantity")
                 ):
-                    price_pen: float = converter.to_pen(
+                    price_pen: Decimal = converter.to_pen(
                         service["price_original"],
                         service.get("price_currency", "PEN"),
                     )
                     service["price_pen"] = price_pen
                     service["ingreso_pen"] = price_pen * service["quantity"]
 
-                if service.get("egreso_pen") in [0, None] and service.get("quantity"):
-                    cost_unit_1_pen: float = converter.to_pen(
-                        service.get("cost_unit_1_original", 0),
+                if service.get("egreso_pen") in [0, Decimal("0"), None] and service.get("quantity"):
+                    cost_unit_1_pen: Decimal = converter.to_pen(
+                        service.get("cost_unit_1_original", Decimal("0")),
                         service.get("cost_unit_currency", "USD"),
                     )
-                    cost_unit_2_pen: float = converter.to_pen(
-                        service.get("cost_unit_2_original", 0),
+                    cost_unit_2_pen: Decimal = converter.to_pen(
+                        service.get("cost_unit_2_original", Decimal("0")),
                         service.get("cost_unit_currency", "USD"),
                     )
                     service["cost_unit_1_pen"] = cost_unit_1_pen
@@ -850,7 +836,7 @@ class TransactionCrudService(BaseService):
         try:
             # 1. Fetch current MasterVariables
             required_vars: list[str] = ["tipoCambio", "costoCapital", "tasaCartaFianza"]
-            master_vars: dict[str, Optional[float]] = self._variable_service.get_latest_master_variables(
+            master_vars: dict[str, Optional[Decimal]] = self._variable_service.get_latest_master_variables(
                 required_vars
             )
 

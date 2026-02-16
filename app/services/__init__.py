@@ -29,6 +29,7 @@ from app.services.email_service import EmailService
 from app.services.excel_parser import ExcelParserService
 from app.services.file_guards import FileGuardsService
 from app.services.file_watcher import FileWatcherService
+from app.services.inbox_scan_service import InboxScanService
 from app.services.jit_provisioning import JITProvisioningService
 from app.services.kpi import KPIService
 from app.services.native_opener import NativeOpenerService
@@ -37,6 +38,8 @@ from app.services.transaction_crud import TransactionCrudService
 from app.services.transaction_preview import TransactionPreviewService
 from app.services.transaction_workflow import TransactionWorkflowService
 from app.services.session_cache import SessionCacheService
+from app.services.file_archival import FileArchivalService
+from app.services.sync_worker import SyncWorkerService
 from app.services.users import UserService
 from app.services.variables import VariableService
 
@@ -68,6 +71,13 @@ class ServiceContainer(TypedDict, total=False):
     file_guards_service: FileGuardsService
     native_opener_service: NativeOpenerService
     file_watcher_service: Optional[FileWatcherService]
+
+    # --- Phase 3: Card Engine ---
+    inbox_scan_service: Optional[InboxScanService]
+
+    # --- Phase 4: Archival & Sync ---
+    file_archival_service: FileArchivalService
+    sync_worker: Optional[SyncWorkerService]
 
 
 def create_services(
@@ -143,25 +153,12 @@ def create_services(
     # ------------------------------------------------------------------
     # 3. Orchestration services (depend on other services)
     # ------------------------------------------------------------------
-    excel_parser_service = ExcelParserService(
-        variable_service=variable_service,
-        config=config,
-        logger=logger,
-    )
     transaction_crud_service = TransactionCrudService(
         transaction_repo=transaction_repo,
         fixed_cost_repo=fixed_cost_repo,
         recurring_service_repo=recurring_service_repo,
         email_service=email_service,
         variable_service=variable_service,
-        logger=logger,
-    )
-    transaction_workflow_service = TransactionWorkflowService(
-        transaction_repo=transaction_repo,
-        fixed_cost_repo=fixed_cost_repo,
-        recurring_service_repo=recurring_service_repo,
-        email_service=email_service,
-        crud_service=transaction_crud_service,
         logger=logger,
     )
 
@@ -192,6 +189,57 @@ def create_services(
             "SharePoint path not found — file watcher disabled: %s", exc,
         )
 
+    # ------------------------------------------------------------------
+    # 5b. Phase 4 — File Archival service
+    # ------------------------------------------------------------------
+    file_archival_service = FileArchivalService(
+        file_guards=file_guards_service,
+        path_discovery=path_discovery_service,
+        app_settings=app_settings_service,
+        config=config,
+        logger=logger,
+    )
+
+    transaction_workflow_service = TransactionWorkflowService(
+        transaction_repo=transaction_repo,
+        fixed_cost_repo=fixed_cost_repo,
+        recurring_service_repo=recurring_service_repo,
+        email_service=email_service,
+        crud_service=transaction_crud_service,
+        file_archival=file_archival_service,
+        logger=logger,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Phase 3 — Card Engine services (depend on Phase 2 services)
+    # ------------------------------------------------------------------
+    excel_parser_service = ExcelParserService(
+        variable_service=variable_service,
+        config=config,
+        logger=logger,
+        file_guards=file_guards_service,
+    )
+
+    inbox_scan_service: Optional[InboxScanService] = None
+    if file_watcher_service is not None:
+        inbox_scan_service = InboxScanService(
+            file_watcher=file_watcher_service,
+            file_guards=file_guards_service,
+            excel_parser=excel_parser_service,
+            logger=logger,
+        )
+
+    # ------------------------------------------------------------------
+    # 7. Phase 4 — Background Sync Worker
+    # ------------------------------------------------------------------
+    sync_worker: Optional[SyncWorkerService] = None
+    if db.is_online:
+        sync_worker = SyncWorkerService(
+            db=db,
+            config=config,
+            logger=logger,
+        )
+
     return ServiceContainer(
         auth_service=auth_service,
         variable_service=variable_service,
@@ -208,4 +256,7 @@ def create_services(
         file_guards_service=file_guards_service,
         native_opener_service=native_opener_service,
         file_watcher_service=file_watcher_service,
+        inbox_scan_service=inbox_scan_service,
+        file_archival_service=file_archival_service,
+        sync_worker=sync_worker,
     )

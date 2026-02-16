@@ -16,6 +16,7 @@ from app.models.fixed_cost import FixedCost
 from app.models.recurring_service import RecurringService
 from app.models.transaction import Transaction, MasterVariablesSnapshot, FinancialCache
 from app.models.auth_models import CachedSession
+from app.models.card_models import CardData
 
 __all__ = [
     "UserRole",
@@ -29,4 +30,5 @@ __all__ = [
     "MasterVariablesSnapshot",
     "FinancialCache",
     "CachedSession",
+    "CardData",
 ]

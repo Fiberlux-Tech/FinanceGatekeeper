@@ -6,7 +6,7 @@ Handles data access for FixedCost line items belonging to transactions.
 
 from __future__ import annotations
 
-import sqlite3
+from decimal import Decimal
 from typing import Optional
 
 from app.logger import StructuredLogger
@@ -34,7 +34,7 @@ class FixedCostRepository(BaseRepository):
         Returns:
             The FixedCost if found, or None.
         """
-        try:
+        def _supabase() -> Optional[FixedCost]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -42,29 +42,24 @@ class FixedCostRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                return FixedCost(**response.data)
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for fixed cost lookup by id: %s", exc
-            )
+            return FixedCost(**response.data) if response.data else None
 
-        try:
+        def _sqlite() -> Optional[FixedCost]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE id = ?", (item_id,)
             ).fetchone()
-            if row:
-                return FixedCost(**dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_id (fixed_costs): %s",
-                sqlite_exc,
-            )
-        return None
+            return FixedCost(**dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_id (fixed_costs)",
+        )
 
     def get_by_transaction(self, transaction_id: str) -> list[FixedCost]:
         """Fetch all fixed costs for a transaction."""
-        try:
+        def _supabase() -> list[FixedCost]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -72,21 +67,20 @@ class FixedCostRepository(BaseRepository):
                 .execute()
             )
             return [FixedCost(**row) for row in response.data]
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for fixed costs: %s", exc)
 
-        try:
+        def _sqlite() -> list[FixedCost]:
             rows = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE transaction_id = ?",
                 (transaction_id,),
             ).fetchall()
             return [FixedCost(**dict(row)) for row in rows]
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_transaction (fixed_costs): %s",
-                sqlite_exc,
-            )
-            return []
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=list,
+            operation_name="get_by_transaction (fixed_costs)",
+        )
 
     def replace_for_transaction(
         self, transaction_id: str, costs: list[FixedCost]
@@ -215,12 +209,12 @@ class FixedCostRepository(BaseRepository):
                     cost.tipo_servicio,
                     cost.ticket,
                     cost.ubicacion,
-                    cost.cantidad,
-                    cost.costo_unitario_original,
+                    float(cost.cantidad) if isinstance(cost.cantidad, Decimal) else cost.cantidad,
+                    float(cost.costo_unitario_original) if isinstance(cost.costo_unitario_original, Decimal) else cost.costo_unitario_original,
                     str(cost.costo_unitario_currency),
-                    cost.costo_unitario_pen,
-                    cost.periodo_inicio,
-                    cost.duracion_meses,
+                    float(cost.costo_unitario_pen) if isinstance(cost.costo_unitario_pen, Decimal) else cost.costo_unitario_pen,
+                    float(cost.periodo_inicio) if isinstance(cost.periodo_inicio, Decimal) else cost.periodo_inicio,
+                    float(cost.duracion_meses) if isinstance(cost.duracion_meses, Decimal) else cost.duracion_meses,
                 ),
             )
         self._commit()

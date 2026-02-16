@@ -58,3 +58,36 @@ class FileCheckResult(BaseModel):
 
     status: FileStatus
     message: str
+
+
+class ArchivalResult(BaseModel):
+    """Result of a file archival operation.
+
+    Returned by ``FileArchivalService.archive_approved`` and
+    ``archive_rejected`` to provide metadata about the completed
+    file move.
+
+    Attributes
+    ----------
+    source_path:
+        Original path of the file in the inbox.
+    archived_path:
+        Final destination path after the move.
+    sha256:
+        SHA-256 hex digest verified before the move.
+    transaction_id:
+        The transaction this archival belongs to.
+    business_unit:
+        Business unit used for folder routing.
+    archived_at:
+        UTC timestamp when the file was archived.
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    source_path: Path
+    archived_path: Path
+    sha256: str
+    transaction_id: str
+    business_unit: BusinessUnit
+    archived_at: datetime

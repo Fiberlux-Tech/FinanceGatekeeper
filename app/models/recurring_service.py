@@ -6,6 +6,7 @@ Fields derived from RecurringService() constructor calls in transactions.py.
 """
 
 from __future__ import annotations
+from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -20,13 +21,13 @@ class RecurringService(BaseModel):
     tipo_servicio: Optional[str] = None
     nota: Optional[str] = None
     ubicacion: Optional[str] = None
-    quantity: Optional[float] = Field(
+    quantity: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Quantity of service units",
     )
 
     # Price fields (sale price to client)
-    price_original: Optional[float] = Field(
+    price_original: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Unit sale price in original currency",
     )
@@ -34,17 +35,17 @@ class RecurringService(BaseModel):
         default=Currency.PEN,
         description="Currency of the sale price",
     )
-    price_pen: Optional[float] = Field(
+    price_pen: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Unit sale price converted to PEN",
     )
 
     # Cost Unit fields (costs from provider)
-    cost_unit_1_original: Optional[float] = Field(
+    cost_unit_1_original: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Primary provider cost per unit in original currency",
     )
-    cost_unit_2_original: Optional[float] = Field(
+    cost_unit_2_original: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Secondary provider cost per unit in original currency",
     )
@@ -52,11 +53,11 @@ class RecurringService(BaseModel):
         default=Currency.USD,
         description="Currency of provider costs",
     )
-    cost_unit_1_pen: Optional[float] = Field(
+    cost_unit_1_pen: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Primary provider cost converted to PEN",
     )
-    cost_unit_2_pen: Optional[float] = Field(
+    cost_unit_2_pen: Optional[Decimal] = Field(
         default=None, ge=0,
         description="Secondary provider cost converted to PEN",
     )

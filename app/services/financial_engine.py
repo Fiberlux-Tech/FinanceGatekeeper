@@ -8,6 +8,7 @@ components.  This module is a pure logic library with **no** imports from
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional, Union
 
 from app.models.enums import Currency
@@ -38,7 +39,7 @@ __all__ = [
 # Timeline type aliases — kept as TypeAliases because the timeline is a
 # deeply nested dict structure that serves as output only.
 # ---------------------------------------------------------------------------
-_TimelineLeaf = Union[float, int, str, None]
+_TimelineLeaf = Union[Decimal, int, str, None]
 _TimelineValue = Union[
     _TimelineLeaf,
     list[_TimelineLeaf],
@@ -53,22 +54,22 @@ TimelineDict = dict[str, _TimelineValue]
 class CurrencyConverter:
     """Holds exchange rate state and converts values to PEN."""
 
-    tipo_cambio: float
+    tipo_cambio: Decimal
 
-    def __init__(self, tipo_cambio: float = 1.0) -> None:
-        self.tipo_cambio: float = tipo_cambio or 1.0
+    def __init__(self, tipo_cambio: Decimal = Decimal("1")) -> None:
+        self.tipo_cambio: Decimal = tipo_cambio or Decimal("1")
 
-    def to_pen(self, value: float, currency: Union[Currency, str]) -> float:
+    def to_pen(self, value: Decimal, currency: Union[Currency, str]) -> Decimal:
         """Convert a monetary value to PEN using the stored exchange rate.
 
         Args:
-            value: The monetary amount (defaults to 0.0 if falsy).
+            value: The monetary amount (defaults to Decimal("0") if falsy).
             currency: The source currency (PEN or USD).
 
         Returns:
             The equivalent value in PEN.
         """
-        value = value or 0.0
+        value = value or Decimal("0")
         if currency == Currency.USD:
             return value * self.tipo_cambio
         return value
@@ -79,7 +80,7 @@ class CurrencyConverter:
 def process_recurring_services(
     services: list[RecurringServiceInput],
     converter: CurrencyConverter,
-) -> tuple[list[RecurringServiceInput], float, float]:
+) -> tuple[list[RecurringServiceInput], Decimal, Decimal]:
     """Enrich each service with PEN fields and return aggregates.
 
     Returns new ``RecurringServiceInput`` instances with computed PEN
@@ -93,25 +94,25 @@ def process_recurring_services(
         Tuple of (enriched_services, total_monthly_expense_pen,
         mrc_sum_from_services_orig).
     """
-    mrc_sum_orig: float = 0.0
-    total_monthly_expense_pen: float = 0.0
+    mrc_sum_orig: Decimal = Decimal("0")
+    total_monthly_expense_pen: Decimal = Decimal("0")
     enriched: list[RecurringServiceInput] = []
 
     for item in services:
         q: int = item.quantity or 0
 
-        p_original: float = item.price_original or 0.0
+        p_original: Decimal = item.price_original or Decimal("0")
         p_currency: Currency = item.price_currency
-        p_pen: float = converter.to_pen(p_original, p_currency)
-        ingreso_pen: float = p_pen * q
+        p_pen: Decimal = converter.to_pen(p_original, p_currency)
+        ingreso_pen: Decimal = p_pen * q
         mrc_sum_orig += p_original * q
 
-        cu1_original: float = item.cost_unit_1_original or 0.0
-        cu2_original: float = item.cost_unit_2_original or 0.0
+        cu1_original: Decimal = item.cost_unit_1_original or Decimal("0")
+        cu2_original: Decimal = item.cost_unit_2_original or Decimal("0")
         cu_currency: Currency = item.cost_unit_currency
-        cu1_pen: float = converter.to_pen(cu1_original, cu_currency)
-        cu2_pen: float = converter.to_pen(cu2_original, cu_currency)
-        egreso_pen: float = (cu1_pen + cu2_pen) * q
+        cu1_pen: Decimal = converter.to_pen(cu1_original, cu_currency)
+        cu2_pen: Decimal = converter.to_pen(cu2_original, cu_currency)
+        egreso_pen: Decimal = (cu1_pen + cu2_pen) * q
         total_monthly_expense_pen += egreso_pen
 
         enriched.append(item.model_copy(update={
@@ -128,11 +129,11 @@ def process_recurring_services(
 # --- 3. MRCResolver ---
 
 def resolve_mrc(
-    user_provided_mrc_original: float,
-    mrc_sum_from_services_orig: float,
+    user_provided_mrc_original: Decimal,
+    mrc_sum_from_services_orig: Decimal,
     mrc_currency: Union[Currency, str],
     converter: CurrencyConverter,
-) -> tuple[float, float]:
+) -> tuple[Decimal, Decimal]:
     """Determine final MRC using override logic.
 
     If the user provided a positive MRC value, it takes precedence over the
@@ -147,13 +148,13 @@ def resolve_mrc(
     Returns:
         Tuple of (final_mrc_original, final_mrc_pen).
     """
-    user_provided: float = user_provided_mrc_original or 0.0
+    user_provided: Decimal = user_provided_mrc_original or Decimal("0")
     if user_provided > 0:
-        final_mrc_original: float = user_provided
+        final_mrc_original: Decimal = user_provided
     else:
         final_mrc_original = mrc_sum_from_services_orig
 
-    final_mrc_pen: float = converter.to_pen(final_mrc_original, mrc_currency)
+    final_mrc_pen: Decimal = converter.to_pen(final_mrc_original, mrc_currency)
     return final_mrc_original, final_mrc_pen
 
 
@@ -162,7 +163,7 @@ def resolve_mrc(
 def process_fixed_costs(
     fixed_costs: list[FixedCostInput],
     converter: CurrencyConverter,
-) -> tuple[list[FixedCostInput], float]:
+) -> tuple[list[FixedCostInput], Decimal]:
     """Normalize fixed costs to PEN and calculate the total.
 
     Returns new ``FixedCostInput`` instances with computed PEN fields
@@ -175,15 +176,15 @@ def process_fixed_costs(
     Returns:
         Tuple of (enriched_costs, total_installation_pen).
     """
-    total_installation_pen: float = 0.0
+    total_installation_pen: Decimal = Decimal("0")
     enriched: list[FixedCostInput] = []
 
     for item in fixed_costs:
         cantidad: int = item.cantidad or 0
-        costo_unitario_original: float = item.costo_unitario_original or 0.0
+        costo_unitario_original: Decimal = item.costo_unitario_original or Decimal("0")
         costo_unitario_currency: Currency = item.costo_unitario_currency
-        costo_unitario_pen: float = converter.to_pen(costo_unitario_original, costo_unitario_currency)
-        total_pen: float = cantidad * costo_unitario_pen
+        costo_unitario_pen: Decimal = converter.to_pen(costo_unitario_original, costo_unitario_currency)
+        total_pen: Decimal = cantidad * costo_unitario_pen
         total_installation_pen += total_pen
 
         enriched.append(item.model_copy(update={
@@ -198,12 +199,12 @@ def process_fixed_costs(
 
 def calculate_carta_fianza(
     aplica: bool,
-    tasa: float,
+    tasa: Decimal,
     plazo: int,
-    mrc_original: float,
+    mrc_original: Decimal,
     mrc_currency: Union[Currency, str],
     converter: CurrencyConverter,
-) -> tuple[float, float]:
+) -> tuple[Decimal, Decimal]:
     """Calculate Carta Fianza cost in original currency and PEN.
 
     Formula: 10% * plazo * MRC_ORIG * 1.18 * tasa
@@ -217,14 +218,14 @@ def calculate_carta_fianza(
         converter: Currency converter with the active exchange rate.
 
     Returns:
-        Tuple of (costo_orig, costo_pen). Both are 0.0 when not applicable.
+        Tuple of (costo_orig, costo_pen). Both are Decimal("0") when not applicable.
     """
     if not aplica:
-        return 0.0, 0.0
+        return Decimal("0"), Decimal("0")
 
-    tasa = tasa or 0.0
-    costo_orig: float = 0.10 * plazo * mrc_original * 1.18 * tasa
-    costo_pen: float = converter.to_pen(costo_orig, mrc_currency)
+    tasa = tasa or Decimal("0")
+    costo_orig: Decimal = Decimal("0.10") * plazo * mrc_original * Decimal("1.18") * tasa
+    costo_pen: Decimal = converter.to_pen(costo_orig, mrc_currency)
     return costo_orig, costo_pen
 
 
@@ -233,14 +234,14 @@ def calculate_carta_fianza(
 def _prepare_and_calculate_commission(
     unidad_negocio: str,
     plazo_contrato: int,
-    total_revenue: float,
-    gross_margin_ratio: float,
-    mrc_pen: float,
+    total_revenue: Decimal,
+    gross_margin_ratio: Decimal,
+    mrc_pen: Decimal,
     payback: Optional[int],
     gigalan_region: Optional[str],
     gigalan_sale_type: Optional[str],
-    gigalan_old_mrc: Optional[float],
-) -> float:
+    gigalan_old_mrc: Optional[Decimal],
+) -> Decimal:
     """Construct a ``CommissionInput`` from explicit params and delegate to the rules engine.
 
     Args:
@@ -287,27 +288,27 @@ def initialize_timeline(num_periods: int) -> TimelineDict:
     return {
         'periods': [f"t={i}" for i in range(num_periods)],
         'revenues': {
-            'nrc': [0.0] * num_periods,
-            'mrc': [0.0] * num_periods,
+            'nrc': [Decimal("0")] * num_periods,
+            'mrc': [Decimal("0")] * num_periods,
         },
         'expenses': {
-            'comisiones': [0.0] * num_periods,
-            'egreso': [0.0] * num_periods,
+            'comisiones': [Decimal("0")] * num_periods,
+            'egreso': [Decimal("0")] * num_periods,
             'fixed_costs': [],
         },
-        'net_cash_flow': [0.0] * num_periods,
+        'net_cash_flow': [Decimal("0")] * num_periods,
     }
 
 
 def build_timeline(
     num_periods: int,
-    nrc_pen: float,
-    mrc_pen: float,
-    comisiones: float,
-    carta_fianza_pen: float,
-    monthly_expense_pen: float,
+    nrc_pen: Decimal,
+    mrc_pen: Decimal,
+    comisiones: Decimal,
+    carta_fianza_pen: Decimal,
+    monthly_expense_pen: Decimal,
     fixed_costs: list[FixedCostInput],
-) -> tuple[TimelineDict, float, list[float]]:
+) -> tuple[TimelineDict, Decimal, list[Decimal]]:
     """Build period-by-period cash flow timeline.
 
     Args:
@@ -336,14 +337,14 @@ def build_timeline(
         timeline['expenses']['egreso'][i] = -monthly_expense_pen
 
     # C. Fixed costs distribution
-    total_fixed_costs_applied_pen: float = 0.0
+    total_fixed_costs_applied_pen: Decimal = Decimal("0")
     for cost_item in fixed_costs:
-        cost_total_pen: float = cost_item.total_pen or 0.0
+        cost_total_pen: Decimal = cost_item.total_pen or Decimal("0")
         periodo_inicio: int = cost_item.periodo_inicio or 0
         duracion_meses: int = max(cost_item.duracion_meses or 1, 1)
 
-        cost_timeline_values: list[float] = [0.0] * num_periods
-        distributed_cost: float = cost_total_pen / duracion_meses
+        cost_timeline_values: list[Decimal] = [Decimal("0")] * num_periods
+        distributed_cost: Decimal = cost_total_pen / duracion_meses
 
         for i in range(duracion_meses):
             current_period: int = periodo_inicio + i
@@ -362,9 +363,9 @@ def build_timeline(
         })
 
     # D. Net cash flow
-    net_cash_flow_list: list[float] = []
+    net_cash_flow_list: list[Decimal] = []
     for t in range(num_periods):
-        net_t: float = (
+        net_t: Decimal = (
             timeline['revenues']['nrc'][t]
             + timeline['revenues']['mrc'][t]
             + timeline['expenses']['comisiones'][t]
@@ -382,10 +383,10 @@ def build_timeline(
 # --- 8. KPICalculator ---
 
 def calculate_kpis(
-    net_cash_flow_list: list[float],
-    total_revenue: float,
-    total_expense: float,
-    costo_capital_anual: float,
+    net_cash_flow_list: list[Decimal],
+    total_revenue: Decimal,
+    total_expense: Decimal,
+    costo_capital_anual: Decimal,
 ) -> KPIResult:
     """Calculate VAN, TIR, payback, gross margin, and gross margin ratio.
 
@@ -399,11 +400,11 @@ def calculate_kpis(
         ``KPIResult`` model with van, tir, payback, total_revenue,
         total_expense, gross_margin, and gross_margin_ratio.
     """
-    monthly_discount_rate: float = costo_capital_anual / 12
-    van: float = calculate_npv(monthly_discount_rate, net_cash_flow_list)
-    tir: Optional[float] = calculate_irr(net_cash_flow_list)
+    monthly_discount_rate: Decimal = costo_capital_anual / 12
+    van: Decimal = calculate_npv(monthly_discount_rate, net_cash_flow_list)
+    tir: Optional[Decimal] = calculate_irr(net_cash_flow_list)
 
-    cumulative_cash_flow: float = 0.0
+    cumulative_cash_flow: Decimal = Decimal("0")
     payback: Optional[int] = None
     for i, flow in enumerate(net_cash_flow_list):
         cumulative_cash_flow += flow
@@ -411,7 +412,7 @@ def calculate_kpis(
             payback = i
             break
 
-    gross_margin: float = total_revenue - total_expense
+    gross_margin: Decimal = total_revenue - total_expense
 
     return KPIResult(
         van=van,
@@ -420,7 +421,7 @@ def calculate_kpis(
         total_revenue=total_revenue,
         total_expense=total_expense,
         gross_margin=gross_margin,
-        gross_margin_ratio=(gross_margin / total_revenue) if total_revenue else 0.0,
+        gross_margin_ratio=(gross_margin / total_revenue) if total_revenue else Decimal("0"),
     )
 
 
@@ -464,20 +465,35 @@ def calculate_financial_metrics(
     else:
         engine_input = data.model_copy(deep=True)
 
+    # --- Guard clauses: reject nonsensical inputs early (M3) ---
+    if engine_input.plazo_contrato < 0:
+        raise ValueError(
+            f"plazo_contrato must be >= 0, got {engine_input.plazo_contrato}"
+        )
+    if engine_input.tipo_cambio <= 0:
+        raise ValueError(
+            f"tipo_cambio must be > 0, got {engine_input.tipo_cambio}"
+        )
+    if engine_input.costo_capital_anual < 0 or engine_input.costo_capital_anual > Decimal("10"):
+        raise ValueError(
+            f"costo_capital_anual must be between 0 and 10.0 (1000%), "
+            f"got {engine_input.costo_capital_anual}"
+        )
+
     converter: CurrencyConverter = CurrencyConverter(engine_input.tipo_cambio)
     plazo: int = engine_input.plazo_contrato
 
     # 1. Process recurring services
     services: list[RecurringServiceInput]
-    monthly_expense_pen: float
-    mrc_sum_orig: float
+    monthly_expense_pen: Decimal
+    mrc_sum_orig: Decimal
     services, monthly_expense_pen, mrc_sum_orig = process_recurring_services(
         engine_input.recurring_services, converter,
     )
 
     # 2. Resolve MRC (override vs. sum from services)
-    mrc_orig: float
-    mrc_pen: float
+    mrc_orig: Decimal
+    mrc_pen: Decimal
     mrc_orig, mrc_pen = resolve_mrc(
         engine_input.mrc_original,
         mrc_sum_orig,
@@ -486,19 +502,19 @@ def calculate_financial_metrics(
     )
 
     # 3. NRC normalization
-    nrc_orig: float = engine_input.nrc_original or 0.0
-    nrc_pen: float = converter.to_pen(nrc_orig, engine_input.nrc_currency)
+    nrc_orig: Decimal = engine_input.nrc_original or Decimal("0")
+    nrc_pen: Decimal = converter.to_pen(nrc_orig, engine_input.nrc_currency)
 
     # 4. Fixed costs
     costs: list[FixedCostInput]
-    installation_pen: float
+    installation_pen: Decimal
     costs, installation_pen = process_fixed_costs(
         engine_input.fixed_costs, converter,
     )
 
     # 5. Carta Fianza
-    cf_orig: float
-    cf_pen: float
+    cf_orig: Decimal
+    cf_pen: Decimal
     cf_orig, cf_pen = calculate_carta_fianza(
         engine_input.aplica_carta_fianza,
         engine_input.tasa_carta_fianza,
@@ -509,13 +525,13 @@ def calculate_financial_metrics(
     )
 
     # 6. Revenue & pre-commission margin
-    total_revenue: float = nrc_pen + (mrc_pen * plazo)
-    total_expense_pre: float = installation_pen + (monthly_expense_pen * plazo)
-    gm_pre: float = total_revenue - total_expense_pre
-    gm_ratio: float = (gm_pre / total_revenue) if total_revenue else 0.0
+    total_revenue: Decimal = nrc_pen + (mrc_pen * plazo)
+    total_expense_pre: Decimal = installation_pen + (monthly_expense_pen * plazo)
+    gm_pre: Decimal = total_revenue - total_expense_pre
+    gm_ratio: Decimal = (gm_pre / total_revenue) if total_revenue else Decimal("0")
 
     # 7. Commission
-    comisiones: float = _prepare_and_calculate_commission(
+    comisiones: Decimal = _prepare_and_calculate_commission(
         unidad_negocio=engine_input.unidad_negocio,
         plazo_contrato=plazo,
         total_revenue=total_revenue,
@@ -529,15 +545,15 @@ def calculate_financial_metrics(
 
     # 8. Timeline
     timeline: TimelineDict
-    fixed_applied: float
-    ncf_list: list[float]
+    fixed_applied: Decimal
+    ncf_list: list[Decimal]
     timeline, fixed_applied, ncf_list = build_timeline(
         plazo + 1, nrc_pen, mrc_pen, comisiones, cf_pen,
         monthly_expense_pen, engine_input.fixed_costs,
     )
 
     # 9. KPIs
-    total_expense: float = comisiones + fixed_applied + (monthly_expense_pen * plazo) + cf_pen
+    total_expense: Decimal = comisiones + fixed_applied + (monthly_expense_pen * plazo) + cf_pen
     kpis: KPIResult = calculate_kpis(
         ncf_list, total_revenue, total_expense, engine_input.costo_capital_anual,
     )
@@ -555,9 +571,9 @@ def calculate_financial_metrics(
         gross_margin=kpis.gross_margin,
         gross_margin_ratio=kpis.gross_margin_ratio,
         comisiones=comisiones,
-        comisiones_rate=(comisiones / total_revenue) if total_revenue else 0.0,
+        comisiones_rate=(comisiones / total_revenue) if total_revenue else Decimal("0"),
         costo_instalacion=fixed_applied,
-        costo_instalacion_ratio=(fixed_applied / total_revenue) if total_revenue else 0.0,
+        costo_instalacion_ratio=(fixed_applied / total_revenue) if total_revenue else Decimal("0"),
         costo_carta_fianza=cf_pen,
         aplica_carta_fianza=engine_input.aplica_carta_fianza,
         timeline=timeline,

@@ -7,7 +7,7 @@ Variables are append-only (historical records preserved for audit trail).
 
 from __future__ import annotations
 
-import sqlite3
+from decimal import Decimal
 from typing import Optional
 
 from app.database import DatabaseManager
@@ -26,7 +26,7 @@ class MasterVariableRepository(BaseRepository):
 
     def get_all(self, category: Optional[str] = None) -> list[MasterVariable]:
         """Fetch all master variables, optionally filtered by category."""
-        try:
+        def _supabase() -> list[MasterVariable]:
             query = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -35,42 +35,36 @@ class MasterVariableRepository(BaseRepository):
             if category:
                 query = query.eq("category", category)
             response = query.execute()
-            variables = [
-                MasterVariable(**row) for row in response.data
-            ]
-            return variables
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for get_all variables: %s", exc)
+            return [MasterVariable(**row) for row in response.data]
 
-        # SQLite fallback
-        try:
+        def _sqlite() -> list[MasterVariable]:
             sql = f"SELECT * FROM {self.TABLE}"
             params: list[str] = []
             if category:
                 sql += " WHERE category = ?"
                 params.append(category)
             sql += " ORDER BY date_recorded DESC"
-
             rows = self.sqlite.execute(sql, params).fetchall()
             return [MasterVariable(**dict(row)) for row in rows]
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_all (master_variables): %s",
-                sqlite_exc,
-            )
-            return []
 
-    def get_latest(self, variable_names: list[str]) -> dict[str, Optional[float]]:
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=list,
+            operation_name="get_all (master_variables)",
+        )
+
+    def get_latest(self, variable_names: list[str]) -> dict[str, Optional[Decimal]]:
         """
         Get the most recent value for each variable name.
 
         Returns a dict mapping variable_name -> latest value (or None if not found).
         This replaces the legacy SQLAlchemy subquery + join pattern.
         """
-        result: dict[str, Optional[float]] = {name: None for name in variable_names}
+        def _make_default() -> dict[str, Optional[Decimal]]:
+            return {name: None for name in variable_names}
 
-        try:
-            # Supabase: fetch all records for these variable names, ordered by date desc
+        def _supabase() -> dict[str, Optional[Decimal]]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("variable_name, variable_value, date_recorded")
@@ -78,22 +72,18 @@ class MasterVariableRepository(BaseRepository):
                 .order("date_recorded", desc=True)
                 .execute()
             )
-            # Group by variable_name and take the first (most recent) for each
+            result = _make_default()
             seen: set[str] = set()
             for row in response.data:
                 name = str(row.get("variable_name", ""))
                 if name not in seen and name in result:
-                    result[name] = float(row.get("variable_value", 0))
+                    result[name] = Decimal(str(row.get("variable_value", 0)))
                     seen.add(name)
             return result
-        except Exception as exc:
-            self._logger.warning("Supabase unavailable for get_latest: %s", exc)
 
-        # SQLite fallback: use GROUP BY with MAX(date_recorded)
-        if not variable_names:
-            return result
-
-        try:
+        def _sqlite() -> Optional[dict[str, Optional[Decimal]]]:
+            if not variable_names:
+                return None
             placeholders = ", ".join("?" for _ in variable_names)
             rows = self.sqlite.execute(
                 f"""
@@ -109,17 +99,20 @@ class MasterVariableRepository(BaseRepository):
                 """,
                 variable_names,
             ).fetchall()
-
+            if not rows:
+                return None
+            result = _make_default()
             for row in rows:
                 row_dict = dict(row)
-                result[row_dict["variable_name"]] = float(row_dict["variable_value"])
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_latest (master_variables): %s",
-                sqlite_exc,
-            )
+                result[row_dict["variable_name"]] = Decimal(str(row_dict["variable_value"]))
+            return result
 
-        return result
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=_make_default,
+            operation_name="get_latest (master_variables)",
+        )
 
     def create(self, variable: MasterVariable) -> MasterVariable:
         """
@@ -153,6 +146,12 @@ class MasterVariableRepository(BaseRepository):
 
     def _cache_to_sqlite(self, variable: MasterVariable) -> None:
         """Write variable record to local SQLite cache."""
+        # Convert Decimal to float for SQLite REAL column
+        variable_value_for_sqlite = (
+            float(variable.variable_value)
+            if isinstance(variable.variable_value, Decimal)
+            else variable.variable_value
+        )
         self.sqlite.execute(
             f"""
             INSERT INTO {self.TABLE}
@@ -161,7 +160,7 @@ class MasterVariableRepository(BaseRepository):
             """,
             (
                 variable.variable_name,
-                variable.variable_value,
+                variable_value_for_sqlite,
                 variable.category,
                 variable.user_id,
                 variable.comment,

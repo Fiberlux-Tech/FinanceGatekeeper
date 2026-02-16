@@ -26,7 +26,7 @@ from app.models.file_models import ResolvedPaths
 from app.services import ServiceContainer
 from app.services.auth_service import AuthService
 from app.services.file_watcher import FileWatcherService
-from app.ui.components.status_bar import StatusBar
+from app.services.sync_worker import SyncWorkerService
 from app.ui.login_view import LoginView
 from app.ui.module_registry import ModuleRegistry
 from app.ui.sidebar import SidebarNav
@@ -98,7 +98,6 @@ class AppShell(ctk.CTk):
         # Layout containers (created on demand)
         self._sidebar: Optional[SidebarNav] = None
         self._content_container: Optional[ctk.CTkFrame] = None
-        self._status_bar: Optional[StatusBar] = None
 
         # Window defaults
         self.title("Finance Gatekeeper OS")
@@ -146,6 +145,8 @@ class AppShell(ctk.CTk):
             on_logout=self._handle_logout,
             session=self._session,
             logger=self._logger,
+            db=self._db,
+            version=_APP_VERSION,
         )
         self._sidebar.pack(side="left", fill="y")
 
@@ -161,15 +162,6 @@ class AppShell(ctk.CTk):
         # --- Content container ---
         self._content_container = ctk.CTkFrame(self, fg_color=CONTENT_BG)
         self._content_container.pack(side="top", fill="both", expand=True)
-
-        # --- Status bar ---
-        self._status_bar = StatusBar(
-            parent=self,
-            db=self._db,
-            logger=self._logger,
-            version=_APP_VERSION,
-        )
-        self._status_bar.pack(side="bottom", fill="x")
 
         # Activate default module — or show a placeholder when none are available
         if role_modules:
@@ -253,6 +245,7 @@ class AppShell(ctk.CTk):
         else:
             self._show_main_shell()
             self._start_file_watcher()
+            self._start_sync_worker()
 
     def _show_path_config(self) -> None:
         """Display the inline path configuration view."""
@@ -289,6 +282,7 @@ class AppShell(ctk.CTk):
         )
         self._show_main_shell()
         self._start_file_watcher()
+        self._start_sync_worker()
 
     def _handle_path_skip(self) -> None:
         """User chose to skip path configuration — proceed without watcher."""
@@ -302,6 +296,7 @@ class AppShell(ctk.CTk):
     def _handle_logout(self) -> None:
         """Delegate logout to AuthService and return to login screen."""
         self._stop_file_watcher()
+        self._stop_sync_worker()
         if self._session_check_job is not None:
             self.after_cancel(self._session_check_job)
             self._session_check_job = None
@@ -325,9 +320,6 @@ class AppShell(ctk.CTk):
         if self._content_container:
             self._content_container.destroy()
             self._content_container = None
-        if self._status_bar:
-            self._status_bar.destroy()
-            self._status_bar = None
 
     # ==================================================================
     # Session refresh
@@ -405,6 +397,18 @@ class AppShell(ctk.CTk):
         if isinstance(watcher, FileWatcherService):
             watcher.stop()
 
+    def _start_sync_worker(self) -> None:
+        """Start the background sync worker if available."""
+        worker = self._services.get("sync_worker")
+        if isinstance(worker, SyncWorkerService):
+            worker.start()
+
+    def _stop_sync_worker(self) -> None:
+        """Stop the background sync worker if running."""
+        worker = self._services.get("sync_worker")
+        if isinstance(worker, SyncWorkerService):
+            worker.stop()
+
     # ==================================================================
     # Window close
     # ==================================================================
@@ -412,6 +416,7 @@ class AppShell(ctk.CTk):
     def _on_close(self) -> None:
         """Gracefully shut down background threads before destroying."""
         self._stop_file_watcher()
+        self._stop_sync_worker()
         if self._session_check_job is not None:
             self.after_cancel(self._session_check_job)
             self._session_check_job = None

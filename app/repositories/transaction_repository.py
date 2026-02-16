@@ -12,6 +12,7 @@ import json
 import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional, TypedDict
 
 from app.database import DatabaseManager
@@ -61,7 +62,7 @@ class TransactionRepository(BaseRepository):
 
     def get_by_id(self, transaction_id: str) -> Optional[Transaction]:
         """Fetch a transaction by ID. Tries Supabase first, falls back to SQLite."""
-        try:
+        def _supabase() -> Optional[Transaction]:
             response = (
                 self.supabase.table(self.TABLE)
                 .select("*")
@@ -69,25 +70,20 @@ class TransactionRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-            if response.data:
-                return self._parse_transaction(response.data)
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for transaction lookup: %s", exc
-            )
+            return self._parse_transaction(response.data) if response.data else None
 
-        try:
+        def _sqlite() -> Optional[Transaction]:
             row = self.sqlite.execute(
                 f"SELECT * FROM {self.TABLE} WHERE id = ?", (transaction_id,)
             ).fetchone()
-            if row:
-                return self._parse_sqlite_transaction(dict(row))
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_by_id (transactions): %s",
-                sqlite_exc,
-            )
-        return None
+            return self._parse_sqlite_transaction(dict(row)) if row else None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: None,
+            operation_name="get_by_id (transactions)",
+        )
 
     def get_paginated(
         self,
@@ -342,7 +338,13 @@ class TransactionRepository(BaseRepository):
 
         Returns dict with: total_pending_mrc, pending_count, total_pending_comisiones.
         """
-        try:
+        _zero_aggregates: PendingAggregates = {
+            "total_pending_mrc": 0.0,
+            "pending_count": 0,
+            "total_pending_comisiones": 0.0,
+        }
+
+        def _supabase() -> PendingAggregates:
             query = (
                 self.supabase.table(self.TABLE)
                 .select("mrc_pen, comisiones")
@@ -371,13 +373,7 @@ class TransactionRepository(BaseRepository):
                 "total_pending_comisiones": total_comisiones,
             }
 
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for pending aggregates: %s", exc
-            )
-
-        # SQLite fallback
-        try:
+        def _sqlite() -> Optional[PendingAggregates]:
             sql = f"""
                 SELECT
                     COALESCE(SUM(mrc_pen), 0) AS total_pending_mrc,
@@ -401,16 +397,14 @@ class TransactionRepository(BaseRepository):
                         row_dict.get("total_pending_comisiones", 0)
                     ),
                 }
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_pending_aggregates (transactions): %s",
-                sqlite_exc,
-            )
-        return {
-            "total_pending_mrc": 0.0,
-            "pending_count": 0,
-            "total_pending_comisiones": 0.0,
-        }
+            return None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: dict(_zero_aggregates),
+            operation_name="get_pending_aggregates (transactions)",
+        )
 
     def get_average_margin(
         self,
@@ -419,7 +413,7 @@ class TransactionRepository(BaseRepository):
         status: Optional[str] = None,
     ) -> float:
         """Get the average gross margin ratio, optionally filtered."""
-        try:
+        def _supabase() -> float:
             query = (
                 self.supabase.table(self.TABLE)
                 .select("gross_margin_ratio")
@@ -444,13 +438,7 @@ class TransactionRepository(BaseRepository):
 
             return sum(margins) / len(margins) if margins else 0.0
 
-        except Exception as exc:
-            self._logger.warning(
-                "Supabase unavailable for average margin: %s", exc
-            )
-
-        # SQLite fallback
-        try:
+        def _sqlite() -> Optional[float]:
             sql = f"""
                 SELECT AVG(gross_margin_ratio) AS avg_margin
                 FROM {self.TABLE}
@@ -474,12 +462,14 @@ class TransactionRepository(BaseRepository):
             if row:
                 avg = dict(row).get("avg_margin")
                 return float(avg) if avg is not None else 0.0
-        except sqlite3.Error as sqlite_exc:
-            self._logger.error(
-                "SQLite fallback also failed for get_average_margin (transactions): %s",
-                sqlite_exc,
-            )
-        return 0.0
+            return None
+
+        return self._execute_with_fallback(
+            supabase_op=_supabase,
+            sqlite_op=_sqlite,
+            default_factory=lambda: 0.0,
+            operation_name="get_average_margin (transactions)",
+        )
 
     # --- Private helpers ---
 
@@ -534,6 +524,10 @@ class TransactionRepository(BaseRepository):
             val = data.get(enum_field)
             if val is not None:
                 data[enum_field] = str(val)
+        # Convert Decimal to float for JSON serialization
+        for key, val in data.items():
+            if isinstance(val, Decimal):
+                data[key] = float(val)
         return data
 
     # Hardcoded column allowlist for SQLite cache (H-2 fix).
@@ -599,6 +593,10 @@ class TransactionRepository(BaseRepository):
             val = data.get(enum_field)
             if val is not None:
                 data[enum_field] = str(val)
+        # Convert Decimal to float for SQLite REAL columns
+        for key, val in data.items():
+            if isinstance(val, Decimal):
+                data[key] = float(val)
 
         # Use hardcoded allowlist — only known columns enter the SQL statement
         columns_sql = ", ".join(self._SQLITE_COLUMNS)

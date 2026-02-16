@@ -6,6 +6,7 @@ Fields derived from FixedCost() constructor calls in transactions.py.
 """
 
 from __future__ import annotations
+from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -21,10 +22,10 @@ class FixedCost(BaseModel):
     tipo_servicio: Optional[str] = None
     ticket: Optional[str] = None
     ubicacion: Optional[str] = None
-    cantidad: Optional[float] = Field(default=None, ge=0)
-    costo_unitario_original: Optional[float] = Field(default=None, ge=0)
+    cantidad: Optional[Decimal] = Field(default=None, ge=0)
+    costo_unitario_original: Optional[Decimal] = Field(default=None, ge=0)
     costo_unitario_currency: Currency = Currency.USD
-    costo_unitario_pen: Optional[float] = Field(default=None, ge=0)
+    costo_unitario_pen: Optional[Decimal] = Field(default=None, ge=0)
     periodo_inicio: int = Field(default=0, ge=0)
     duracion_meses: int = Field(default=1, ge=1)
 

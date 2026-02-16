@@ -24,7 +24,10 @@
       "Bash(sqlite3:*)",
       "Bash(python3:*)",
       "Bash(findstr:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(cmd /c type:*)",
+      "Bash(pip show:*)",
+      "Bash(wc:*)"
     ]
   }
 }

@@ -14,11 +14,12 @@ Functions ported:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from app.models.user import User
 from app.logger import StructuredLogger
-from app.models.enums import ApprovalStatus, UserRole
+from app.models.enums import ApprovalStatus, BusinessUnit, UserRole
 from app.models.service_models import ServiceResult
 from app.models.transaction import Transaction
 from app.repositories.fixed_cost_repository import FixedCostRepository
@@ -26,6 +27,7 @@ from app.repositories.recurring_service_repository import RecurringServiceReposi
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.base_service import BaseService
 from app.services.email_service import EmailService
+from app.services.file_archival import FileArchivalService
 from app.services.financial_engine import calculate_financial_metrics
 from app.services.transaction_crud import TransactionCrudService
 from app.utils.audit import log_audit_event
@@ -47,6 +49,7 @@ class TransactionWorkflowService(BaseService):
         recurring_service_repo: RecurringServiceRepository,
         email_service: EmailService,
         crud_service: TransactionCrudService,
+        file_archival: FileArchivalService,
         logger: StructuredLogger,
     ) -> None:
         super().__init__(logger)
@@ -55,6 +58,7 @@ class TransactionWorkflowService(BaseService):
         self._rs_repo = recurring_service_repo
         self._email_service = email_service
         self._crud_service = crud_service
+        self._file_archival = file_archival
 
     # ------------------------------------------------------------------
     # Private helper: recalculate and apply financial metrics
@@ -74,18 +78,9 @@ class TransactionWorkflowService(BaseService):
         Returns:
             The clean metrics dictionary that was applied.
         """
-        tx_data: dict[str, object] = transaction.model_dump()
-        tx_data["fixed_costs"] = [fc.model_dump() for fc in transaction.fixed_costs]
-        tx_data["recurring_services"] = [rs.model_dump() for rs in transaction.recurring_services]
-        tx_data["gigalan_region"] = transaction.gigalan_region
-        tx_data["gigalan_sale_type"] = transaction.gigalan_sale_type
-        tx_data["gigalan_old_mrc"] = transaction.gigalan_old_mrc
-        tx_data["tasa_carta_fianza"] = transaction.tasa_carta_fianza
-        tx_data["aplica_carta_fianza"] = transaction.aplica_carta_fianza
-
         # Recalculate financial metrics
         financial_metrics: dict[str, object] = calculate_financial_metrics(
-            tx_data,
+            transaction.to_financial_engine_dict(),
         ).model_dump()
         clean_metrics: dict[str, object] = convert_to_json_safe(financial_metrics)
 
@@ -472,3 +467,197 @@ class TransactionWorkflowService(BaseService):
                 error=f"Error during commission recalculation: {str(exc)}",
                 status_code=500,
             )
+
+    # ------------------------------------------------------------------
+    # Public: approve_transaction_with_archival
+    # ------------------------------------------------------------------
+
+    def approve_transaction_with_archival(
+        self,
+        transaction_id: str,
+        current_user: User,
+        source_file_path: Path,
+        business_unit: BusinessUnit,
+        expected_sha256: str,
+        data_payload: Optional[dict[str, object]] = None,
+    ) -> ServiceResult:
+        """Approve a transaction and archive the source file.
+
+        Orchestrates the full approval workflow (M5 — archival-first):
+        1. File archival (verify hash → rename → encrypt → move)
+        2. DB approval (status change, metrics recalculation, audit log)
+
+        File archival runs first so that if it fails, the DB status
+        remains PENDING and the system is consistent.  If DB approval
+        fails after a successful archival, a warning is logged — the
+        file has already moved but the transaction stays PENDING.
+
+        Parameters
+        ----------
+        transaction_id:
+            The ID of the transaction to approve.
+        current_user:
+            The authenticated user performing the approval.
+        source_file_path:
+            Absolute path to the ``.xlsx`` file in the inbox.
+        business_unit:
+            Business unit for archive folder routing.
+        expected_sha256:
+            SHA-256 hash from the card scan — used for chain-of-custody
+            verification before the file is moved.
+        data_payload:
+            Optional updated transaction data to apply before approval.
+
+        Returns
+        -------
+        ServiceResult
+            On success, ``data`` contains ``{'message': str,
+            'archived_path': str | None, 'sha256': str | None}``.
+        """
+        # Step 1: File archival (hash verify → rename → encrypt → move)
+        archival_result = self._file_archival.archive_approved(
+            source_path=source_file_path,
+            transaction_id=transaction_id,
+            business_unit=business_unit,
+            expected_sha256=expected_sha256,
+        )
+
+        if not archival_result.success:
+            return ServiceResult(
+                success=False,
+                error=(
+                    f"File archival failed — transaction remains PENDING. "
+                    f"Detail: {archival_result.error}"
+                ),
+                status_code=archival_result.status_code,
+            )
+
+        archived_path: Optional[str] = None
+        sha256: Optional[str] = None
+        if isinstance(archival_result.data, dict):
+            archived_path = archival_result.data.get("archived_path")
+            sha256 = archival_result.data.get("sha256")
+
+        # Step 2: DB approval (RBAC, state check, metrics, persist, audit, email)
+        db_result = self.approve_transaction(
+            transaction_id=transaction_id,
+            current_user=current_user,
+            data_payload=data_payload,
+        )
+        if not db_result.success:
+            self._logger.warning(
+                "File for transaction %s archived to %s, but DB approval "
+                "failed: %s. Manual DB update may be required.",
+                transaction_id,
+                archived_path,
+                db_result.error,
+            )
+            return db_result
+
+        return ServiceResult(
+            success=True,
+            data={
+                "message": "Transaction approved successfully.",
+                "archived_path": archived_path,
+                "sha256": sha256,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Public: reject_transaction_with_archival
+    # ------------------------------------------------------------------
+
+    def reject_transaction_with_archival(
+        self,
+        transaction_id: str,
+        current_user: User,
+        rejection_note: str,
+        source_file_path: Path,
+        business_unit: BusinessUnit,
+        expected_sha256: str,
+        data_payload: Optional[dict[str, object]] = None,
+    ) -> ServiceResult:
+        """Reject a transaction and archive the source file.
+
+        Orchestrates the full rejection workflow (M5 — archival-first):
+        1. File archival (verify hash → rename → move to rejected archive)
+        2. DB rejection (status change, rejection note, audit log, email)
+
+        File archival runs first so that if it fails, the DB status
+        remains PENDING and the system is consistent.  If DB rejection
+        fails after a successful archival, a warning is logged — the
+        file has already moved but the transaction stays PENDING.
+
+        Parameters
+        ----------
+        transaction_id:
+            The ID of the transaction to reject.
+        current_user:
+            The authenticated user performing the rejection.
+        rejection_note:
+            Reason for rejection (stored in DB and included in email).
+        source_file_path:
+            Absolute path to the ``.xlsx`` file in the inbox.
+        business_unit:
+            Business unit for archive folder routing.
+        expected_sha256:
+            SHA-256 hash from the card scan — used for chain-of-custody
+            verification before the file is moved.
+        data_payload:
+            Optional updated transaction data to apply before rejection.
+
+        Returns
+        -------
+        ServiceResult
+            On success, ``data`` contains ``{'message': str,
+            'archived_path': str | None, 'sha256': str | None}``.
+        """
+        # Step 1: File archival (hash verify → rename → move — no encryption)
+        archival_result = self._file_archival.archive_rejected(
+            source_path=source_file_path,
+            transaction_id=transaction_id,
+            business_unit=business_unit,
+            expected_sha256=expected_sha256,
+        )
+
+        if not archival_result.success:
+            return ServiceResult(
+                success=False,
+                error=(
+                    f"File archival failed — transaction remains PENDING. "
+                    f"Detail: {archival_result.error}"
+                ),
+                status_code=archival_result.status_code,
+            )
+
+        archived_path: Optional[str] = None
+        sha256: Optional[str] = None
+        if isinstance(archival_result.data, dict):
+            archived_path = archival_result.data.get("archived_path")
+            sha256 = archival_result.data.get("sha256")
+
+        # Step 2: DB rejection (RBAC, state check, metrics, persist, audit, email)
+        db_result = self.reject_transaction(
+            transaction_id=transaction_id,
+            current_user=current_user,
+            rejection_note=rejection_note,
+            data_payload=data_payload,
+        )
+        if not db_result.success:
+            self._logger.warning(
+                "File for transaction %s archived to %s, but DB rejection "
+                "failed: %s. Manual DB update may be required.",
+                transaction_id,
+                archived_path,
+                db_result.error,
+            )
+            return db_result
+
+        return ServiceResult(
+            success=True,
+            data={
+                "message": "Transaction rejected successfully.",
+                "archived_path": archived_path,
+                "sha256": sha256,
+            },
+        )

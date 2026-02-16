@@ -85,8 +85,6 @@ class StructuredLogger:
 
     # Default log file configuration
     _DEFAULT_LOG_FILE: str = "gatekeeper.log"
-    _MAX_BYTES: int = 5_242_880  # 5 MB
-    _BACKUP_COUNT: int = 3
 
     def __init__(
         self,
@@ -94,9 +92,18 @@ class StructuredLogger:
         level: int = logging.INFO,
         stream: Union[TextIO, None] = None,
         log_file: Optional[str] = None,
+        max_bytes: Optional[int] = None,
+        backup_count: Optional[int] = None,
     ) -> None:
+        # Lazy import to avoid circular dependency at module level
+        from app.config import get_config
+        _cfg = get_config()
+
         self._logger: logging.Logger = logging.getLogger(name)
         self._logger.setLevel(level)
+
+        resolved_max_bytes: int = max_bytes if max_bytes is not None else _cfg.LOG_MAX_BYTES
+        resolved_backup_count: int = backup_count if backup_count is not None else _cfg.LOG_BACKUP_COUNT
 
         # Prevent duplicate handlers when the same name is reused.
         if not self._logger.handlers:
@@ -115,8 +122,8 @@ class StructuredLogger:
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 file_handler = RotatingFileHandler(
                     filename=str(log_path),
-                    maxBytes=self._MAX_BYTES,
-                    backupCount=self._BACKUP_COUNT,
+                    maxBytes=resolved_max_bytes,
+                    backupCount=resolved_backup_count,
                     encoding="utf-8",
                 )
                 file_handler.setLevel(level)

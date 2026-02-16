@@ -1,8 +1,10 @@
 """Sidebar Navigation Component.
 
 Displays the list of registered modules, the authenticated user's
-identity, and a logout button.  Follows the **Thin UI** rule: zero
-business logic — all actions are delegated via injected callbacks.
+identity, a logout button, and an embedded connectivity status
+indicator.  Follows the **Thin UI** rule: zero business logic —
+all actions are delegated via injected callbacks.  The ``StatusBar``
+is hosted as a child widget and manages its own refresh timer.
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from typing import Callable, Optional
 import customtkinter as ctk
 
 from app.auth import SessionManager
+from app.database import DatabaseManager
 from app.logger import StructuredLogger
+from app.ui.components.status_bar import StatusBar
 from app.ui.theme import (
     ACCENT_PRIMARY,
     FONT_BODY,
@@ -79,9 +83,11 @@ class SidebarNav(ctk.CTkFrame):
     - Render a list of module buttons.
     - Highlight the currently active module.
     - Provide a logout button.
+    - Host the ``StatusBar`` widget at the bottom.
 
     All actions (module switch, logout) are dispatched through injected
-    callbacks — the sidebar performs **no** business logic.
+    callbacks — the sidebar performs **no** business logic.  The embedded
+    ``StatusBar`` manages its own connectivity polling.
 
     Parameters
     ----------
@@ -95,6 +101,11 @@ class SidebarNav(ctk.CTkFrame):
         Used only to read the current user's display name and role.
     logger:
         Structured logger instance.
+    db:
+        Database manager — passed through to the embedded ``StatusBar``.
+    version:
+        Application version string — passed through to the embedded
+        ``StatusBar``.
     """
 
     def __init__(
@@ -104,6 +115,8 @@ class SidebarNav(ctk.CTkFrame):
         on_logout: Callable[[], None],
         session: SessionManager,
         logger: StructuredLogger,
+        db: DatabaseManager,
+        version: str,
     ) -> None:
         super().__init__(parent, width=SIDEBAR_WIDTH, fg_color=SIDEBAR_BG)
         self.pack_propagate(False)
@@ -112,9 +125,12 @@ class SidebarNav(ctk.CTkFrame):
         self._on_logout = on_logout
         self._session = session
         self._logger = logger
+        self._db = db
+        self._version = version
 
         self._buttons: dict[str, _ModuleButton] = {}
         self._active_module_id: Optional[str] = None
+        self._status_bar: Optional[StatusBar] = None
 
         self._build_ui()
 
@@ -146,6 +162,13 @@ class SidebarNav(ctk.CTkFrame):
         if module_id in self._buttons:
             self._buttons[module_id].set_active(True)
         self._active_module_id = module_id
+
+    def destroy(self) -> None:
+        """Destroy the embedded ``StatusBar`` before tearing down."""
+        if self._status_bar is not None:
+            self._status_bar.destroy()
+            self._status_bar = None
+        super().destroy()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -209,10 +232,22 @@ class SidebarNav(ctk.CTkFrame):
         self._modules_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._modules_frame.pack(fill="both", expand=True, padx=0, pady=PADDING_SM)
 
-        # --- Bottom section: separator + logout ---
+        # --- Bottom section (packed side="bottom", last packed = lowest) ---
+
+        # 1. StatusBar — very bottom (packed first with side="bottom")
+        self._status_bar = StatusBar(
+            parent=self,
+            db=self._db,
+            logger=self._logger,
+            version=self._version,
+        )
+        self._status_bar.pack(side="bottom", fill="x")
+
+        # 2. Separator above status bar
         bottom_sep = ctk.CTkFrame(self, height=1, fg_color=SIDEBAR_HOVER)
         bottom_sep.pack(fill="x", padx=PADDING_MD, side="bottom")
 
+        # 3. Logout button above separator
         bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
         bottom_frame.pack(
             fill="x", padx=PADDING_SM, pady=PADDING_SM, side="bottom",
